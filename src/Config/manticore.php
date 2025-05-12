@@ -1,0 +1,11 @@
+<?php
+
+return [
+    'host' => env('MANTICORE_HOST', '127.0.0.1'),
+    'port' => env('MANTICORE_PORT', 9306),
+    'password' => env('MANTICORE_PASSWORD', null),
+    'username' => env('MANTICORE_USERNAME', null),
+    'transport' => env('MANTICORE_TRANSPORT', 'http'),
+    'timeout' => env('MANTICORE_TIMEOUT', 5),
+    'persistent' => env('MANTICORE_PERSISTENT', false),
+];
