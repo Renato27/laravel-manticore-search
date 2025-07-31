@@ -8,4 +8,5 @@ return [
     'transport' => env('MANTICORE_TRANSPORT', 'http'),
     'timeout' => env('MANTICORE_TIMEOUT', 5),
     'persistent' => env('MANTICORE_PERSISTENT', false),
+    'max_matches' => env('MANTICORE_MAX_MATCHES', 1000),
 ];

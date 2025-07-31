@@ -21,6 +21,12 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         return $this;
     }
 
+    public function maxMatches(int $value): static
+    {
+        $this->maxMatches = $value;
+        return $this;
+    }
+
     public function where(string $field, mixed $operatorOrValue, mixed $value = null): static
     {
         if (func_num_args() === 2) {

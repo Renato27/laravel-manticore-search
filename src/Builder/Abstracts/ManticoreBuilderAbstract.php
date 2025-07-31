@@ -27,6 +27,7 @@ abstract class ManticoreBuilderAbstract
     protected array $groupBy = [];
     protected array $select = [];
     protected array $having = [];
+    protected ?int $maxMatches = null;
 
     public function __construct($model)
     {
@@ -173,6 +174,11 @@ abstract class ManticoreBuilderAbstract
             }
         }
 
+        $max = $this->maxMatches ?? config('manticore.max_matches');
+        if ($max !== null) {
+            $search->option('max_matches', $max);
+        }
+
         return $search;
     }
 
@@ -210,6 +216,12 @@ abstract class ManticoreBuilderAbstract
         return !empty($this->having) ? 'HAVING ' . implode(' AND ', $this->having) : '';
     }
 
+    private function buildOptionClause(): string
+    {
+        $max = $this->maxMatches ?? config('manticore.max_matches');
+        return $max ? "OPTION max_matches={$max}" : '';
+    }
+
     protected function buildLimitClause(): string
     {
         $limit  = isset($this->limit)  ? $this->limit : null;
@@ -233,7 +245,8 @@ abstract class ManticoreBuilderAbstract
         $groupBy  = $this->buildGroupByClause();
         $having   = $this->buildHavingClause();
         $limit    = $this->buildLimitClause();
+        $option  = $this->buildOptionClause();
 
-        return trim("SELECT {$select} FROM {$this->resolveIndexName()} {$where} {$groupBy} {$having} {$limit}");
+        return trim("SELECT {$select} FROM {$this->resolveIndexName()} {$where} {$groupBy} {$having} {$limit} {$option}");
     }
 }
