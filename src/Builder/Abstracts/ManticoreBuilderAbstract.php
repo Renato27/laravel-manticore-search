@@ -5,6 +5,8 @@ namespace ManticoreLaravel\Builder\Abstracts;
 use Illuminate\Support\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use ManticoreLaravel\Builder\Utils\ManticoreQueryCompile;
+use ManticoreLaravel\Builder\Utils\Utf8SafeClient;
+use ManticoreLaravel\Builder\Utils\Utf8SafeSearch;
 use Manticoresearch\Client;
 use Manticoresearch\Search;
 
@@ -58,7 +60,7 @@ abstract class ManticoreBuilderAbstract
 
     private function getClient(): Client
     {
-        return new Client([
+        return new Utf8SafeClient([
             'host' => config('manticore.host'),
             'port' => config('manticore.port'),
             'username' => config('manticore.username'),
@@ -121,7 +123,7 @@ abstract class ManticoreBuilderAbstract
     {
         $client = $this->getClient();
 
-        $search = new \Manticoresearch\Search($client);
+        $search = new Utf8SafeSearch($client);
         $this->applyIndex($search);
 
         $bool = new \Manticoresearch\Query\BoolQuery();
