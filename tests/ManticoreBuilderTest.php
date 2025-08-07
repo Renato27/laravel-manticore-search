@@ -11,7 +11,7 @@ class TestModel extends Model
 
     public function searchableAs()
     {
-        return ['index_1', 'index_2'];
+        return ['ttrentitytest'];
     }
 }
 
@@ -31,6 +31,47 @@ class ManticoreBuilderTest extends TestCase
         $app['config']->set('manticore.transport', 'http');
         $app['config']->set('manticore.timeout', 5);
         $app['config']->set('manticore.persistent', false);
+        $app['config']->set('manticore.max_matches', 10000);
+    }
+
+    public function it_applies_max_matches_from_parameter()
+    {
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->match('Portugal')
+            ->maxMatches(20000) 
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+        
+        $this->assertStringContainsString(
+            'OPTION max_matches=20000',
+            $sql,
+            'max_matches definido via parâmetro não foi propagado para a query'
+        );
+    }
+
+    public function it_applies_max_matches_from_config_when_not_overridden()
+    {
+
+        config(['manticore.max_matches' => 8000]);
+
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->match('Portugal')
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+
+        $this->assertStringContainsString(
+            'OPTION max_matches=8000',
+            $sql,
+            'max_matches do config não foi aplicado quando nenhum valor explícito foi passado'
+        );
     }
 
     public function test_basic_match_query()
@@ -137,7 +178,7 @@ class ManticoreBuilderTest extends TestCase
         $results = (new ManticoreBuilder(new TestModel()))
             ->rawQuery("SELECT * FROM {$indexName}  WHERE countryiso = 'PT' LIMIT 2")
             ->get();
-
+        
         $this->assertIsIterable($results);
         $this->assertLessThanOrEqual(2, $results->count());
     }
@@ -223,7 +264,39 @@ class ManticoreBuilderTest extends TestCase
         }
     }
 
+    public function it_returns_a_search_instance()
+    {
+        $builder = new ManticoreBuilder(new TestModel());
 
+        $search = $builder->getSearchInstance();
+
+        $this->assertInstanceOf(\Manticoresearch\Search::class, $search);
+    }
+
+    public function builder_method_returns_the_same_instance()
+    {
+        $builder = new ManticoreBuilder(new TestModel());
+
+        $this->assertSame($builder, $builder->builder());
+    }
+
+    public function it_returns_a_table_instance()
+    {
+        $builder = new ManticoreBuilder(new TestModel());
+
+        $table = $builder->getTableInstance();
+
+        $this->assertInstanceOf(\Manticoresearch\Table::class, $table);
+    }
+
+    public function it_returns_a_client_instance()
+    {
+        $builder = new ManticoreBuilder(new TestModel());
+
+        $client = $builder->getClientInstance();
+
+        $this->assertInstanceOf(\Manticoresearch\Client::class, $client);
+    }
 
 
 }

@@ -234,7 +234,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         return $result->getFacets() ?? [];
     }
 
-    public function getSearch(): \Manticoresearch\Search
+    public function getSearchInstance(): \Manticoresearch\Search
     {
         return $this->search();
     }
@@ -242,6 +242,16 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
     public function builder(): static
     {
         return $this;
+    }
+
+    public function getTableInstance(): \Manticoresearch\Table
+    {
+        return $this->getTable();
+    }
+
+    public function getClientInstance(): \Manticoresearch\Client
+    {
+        return $this->getClient();
     }
     
     public function when($condition, callable $callback, ?callable $default = null): static

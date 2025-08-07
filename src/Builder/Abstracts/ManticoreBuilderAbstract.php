@@ -9,6 +9,7 @@ use ManticoreLaravel\Builder\Utils\Utf8SafeClient;
 use ManticoreLaravel\Builder\Utils\Utf8SafeSearch;
 use Manticoresearch\Client;
 use Manticoresearch\Search;
+use Manticoresearch\Table;
 
 abstract class ManticoreBuilderAbstract
 {
@@ -59,7 +60,7 @@ abstract class ManticoreBuilderAbstract
         $prop->setValue($search, $params);
     }
 
-    private function getClient(): Client
+    protected function getClient(): Client
     {
         return new Utf8SafeClient([
             'host' => config('manticore.host'),
@@ -70,6 +71,14 @@ abstract class ManticoreBuilderAbstract
             'timeout' => config('manticore.timeout'),
             'persistent' => config('manticore.persistent'),
         ]);
+    }
+
+    protected function getTable(): Table
+    {
+        $client = $this->getClient();
+        $table = new Table($client);
+        $table->setName($this->resolveIndexName());
+        return $table;
     }
 
     protected function fetchRawQuery(): Collection
