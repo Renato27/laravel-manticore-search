@@ -103,7 +103,9 @@ abstract class ManticoreBuilderAbstract
         $hits = iterator_to_array($results);
         return collect($hits)->map(function ($hit) {
             $model = clone $this->model;
-            $model->forceFill($hit->getData() ?? []);
+            $id = $this->getID($hit);
+            $data = filled($id) ? array_merge(['id' => $id], $hit->getData() ?? []) : ($hit->getData() ?? []);
+            $model->forceFill($data);
             try {
                 $highlight = $hit->getHighlight();
                 if (!empty($highlight)) {
@@ -123,11 +125,28 @@ abstract class ManticoreBuilderAbstract
 
         return collect($hits)->map(function ($hit) {
             $model = clone $this->model;
-            $model->forceFill($hit['_source'] ?? $hit);
+            $id = $this->getID($hit);
+            $data = filled($id) ? array_merge(['id' => $id], $hit['_source'] ?? []) : ($hit['_source'] ?? []);
+            $model->forceFill($data);
             $model->exists = true;
             return $model;
         });
     }
+
+    private function getID($hit)
+    {
+        if (is_array($hit) && array_key_exists('_id', $hit)) {
+            return $hit['_id'];
+        } elseif (!is_array($hit) && method_exists($hit, 'getId')) {
+            return $hit->getId();
+        } elseif (!is_array($hit) && property_exists($hit, 'id')) {
+            return $hit->id;
+        } elseif (array_key_exists('id', $hit)) {
+            return $hit['id'];
+        }
+        return null;
+    }
+
 
     protected function search(): Search
     {
