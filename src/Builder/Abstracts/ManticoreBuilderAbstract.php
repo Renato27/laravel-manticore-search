@@ -2,6 +2,7 @@
 
 namespace ManticoreLaravel\Builder\Abstracts;
 
+use Carbon\Carbon;
 use Illuminate\Support\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use ManticoreLaravel\Builder\Utils\ManticoreQueryCompile;
@@ -104,8 +105,16 @@ abstract class ManticoreBuilderAbstract
         return collect($hits)->map(function ($hit) {
             $model = clone $this->model;
             $id = $this->getID($hit);
-            $data = filled($id) ? array_merge(['id' => $id], $hit->getData() ?? []) : ($hit->getData() ?? []);
+            $raw = $hit->getData() ?? [];
+            if (filled($id)) $raw = ['id' => $id] + $raw;
+
+            $data = $this->normalizeForModel($raw);
+
+            $pk = $model->getKeyName();
+            if (!empty($data[$pk])) $model->setAttribute($pk, $data[$pk]);
+
             $model->forceFill($data);
+
             try {
                 $highlight = $hit->getHighlight();
                 if (!empty($highlight)) {
@@ -126,11 +135,114 @@ abstract class ManticoreBuilderAbstract
         return collect($hits)->map(function ($hit) {
             $model = clone $this->model;
             $id = $this->getID($hit);
-            $data = filled($id) ? array_merge(['id' => $id], $hit['_source'] ?? []) : ($hit['_source'] ?? []);
+            $raw = $hit['_source'] ?? [];
+            if (filled($id)) $raw = ['id' => $id] + $raw;
+
+            $data = $this->normalizeForModel($raw);
+
+            $pk = $model->getKeyName();
+            if (!empty($data[$pk])) $model->setAttribute($pk, $data[$pk]);
+
             $model->forceFill($data);
             $model->exists = true;
             return $model;
         });
+    }
+
+    private function buildFieldMap(array $sourceKeys): array
+    {
+        $declaredMap = [];
+        $model = $this->model;
+        if (property_exists($model, 'manticoreAttributeMap') && is_array($model->manticoreAttributeMap)) {
+            $declaredMap = $model->manticoreAttributeMap;
+        } elseif (method_exists($model, 'manticoreAttributeMap')) {
+            $declaredMap = (array) $model->manticoreAttributeMap();
+        }
+
+        $explicit = [];
+        foreach ($declaredMap as $from => $to) {
+            $explicit[strtolower($from)] = $to;
+        }
+
+        $sourceKeyIndex = [];
+        foreach ($sourceKeys as $k) {
+            $sourceKeyIndex[strtolower($k)] = $k;
+        }
+
+        $candidates = array_unique(array_merge([$model->getKeyName()], $model->getFillable()));
+
+        $variants = function (string $name): array {
+            $o = $name;
+            $l = strtolower($name);
+            $s = strtolower(preg_replace('/([a-z])([A-Z])/', '$1_$2', $name));
+            $n = preg_replace('/[^a-z0-9]/', '', strtolower($name));
+
+            return array_unique([$o, $l, $s, $n]);
+        };
+
+        $map = [];
+
+        foreach ($explicit as $fromLower => $to) {
+            if (isset($sourceKeyIndex[$fromLower])) {
+                $fromOriginal = $sourceKeyIndex[$fromLower];
+                $map[$fromOriginal] = $to;
+            }
+        }
+
+        foreach ($candidates as $col) {
+            foreach ($variants($col) as $v) {
+                $vLower = strtolower($v);
+                if (isset($sourceKeyIndex[$vLower]) && !in_array($sourceKeyIndex[$vLower], array_keys($map), true)) {
+                    $fromOriginal = $sourceKeyIndex[$vLower];
+                    $map[$fromOriginal] = $col;
+                    break; 
+                }
+            }
+        }
+
+        if (isset($sourceKeyIndex['id'])) {
+            $pk = $model->getKeyName();
+            $map[$sourceKeyIndex['id']] = $pk;
+        }
+
+        return $map;
+    }
+
+    private function normalizeForModel(array $source): array
+    {
+        $model = $this->model;
+        $fieldMap = $this->buildFieldMap(array_keys($source));
+
+        $out = [];
+
+        foreach ($source as $k => $v) {
+            $target = $fieldMap[$k] ?? $k;
+            $out[$target] = $v;
+        }
+
+        $pk = $model->getKeyName();
+        if (!empty($out['id']) && $pk !== 'id' && empty($out[$pk])) {
+            $out[$pk] = $out['id'];
+            unset($out['id']);
+        }
+
+        $casts = method_exists($model, 'getCasts') ? $model->getCasts() : [];
+        foreach ($casts as $attr => $cast) {
+            $cast = strtolower($cast);
+            if (!array_key_exists($attr, $out)) continue;
+
+            $val = $out[$attr];
+            if (str_contains($cast, 'datetime')) {
+                if (is_numeric($val) || (is_string($val) && ctype_digit($val))) {
+                    $out[$attr] = Carbon::createFromTimestampUTC((int)$val);
+                }
+            } elseif ($cast === 'boolean') {
+                if ($val === '0' || $val === 0) $out[$attr] = false;
+                if ($val === '1' || $val === 1) $out[$attr] = true;
+            }
+        }
+
+        return $out;
     }
 
     private function getID($hit)
