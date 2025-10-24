@@ -3,7 +3,7 @@
 namespace ManticoreLaravel\Builder\Abstracts;
 
 use Carbon\Carbon;
-use Illuminate\Support\Collection;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use ManticoreLaravel\Builder\Utils\ManticoreQueryCompile;
 use ManticoreLaravel\Builder\Utils\Utf8SafeClient;
@@ -30,6 +30,7 @@ abstract class ManticoreBuilderAbstract
     protected array $select = [];
     protected array $having = [];
     protected ?int $maxMatches = null;
+    protected array $eagerQueue = [];
 
     public function __construct($model)
     {
@@ -87,7 +88,8 @@ abstract class ManticoreBuilderAbstract
         $client = $this->getClient();
 
         $results = $client->sql($this->rawQuery, $this->rawQueryMode);
-        return $this->resolveResults($results);
+        $col = $this->resolveResults($results);
+        return $this->applyEloquentWith($col);
     }
 
     protected function resolveResults($results): Collection
@@ -102,29 +104,22 @@ abstract class ManticoreBuilderAbstract
     private function resolveResultsDefault($results): Collection
     {
         $hits = iterator_to_array($results);
-        return collect($hits)->map(function ($hit) {
+        $models = array_map(function ($hit) {
             $model = clone $this->model;
             $id = $this->getID($hit);
             $raw = $hit->getData() ?? [];
             if (filled($id)) $raw = ['id' => $id] + $raw;
 
             $data = $this->normalizeForModel($raw);
-
             $pk = $model->getKeyName();
             if (!empty($data[$pk])) $model->setAttribute($pk, $data[$pk]);
-
             $model->forceFill($data);
-
-            try {
-                $highlight = $hit->getHighlight();
-                if (!empty($highlight)) {
-                    $model->highlight = $highlight;
-                }
-            } catch (\Throwable $e) {
-            }
+            try { $highlight = $hit->getHighlight(); if (!empty($highlight)) $model->highlight = $highlight; } catch (\Throwable $e) {}
             $model->exists = true;
             return $model;
-        });
+        }, $hits);
+
+        return new Collection($models);
     }
 
     private function resolveResultsArray($results): Collection
@@ -132,21 +127,21 @@ abstract class ManticoreBuilderAbstract
         $hits = $results['hits']['hits'] ?? [];
         $hits = iterator_to_array($hits);
 
-        return collect($hits)->map(function ($hit) {
+        $models = array_map(function ($hit) {
             $model = clone $this->model;
             $id = $this->getID($hit);
             $raw = $hit['_source'] ?? [];
             if (filled($id)) $raw = ['id' => $id] + $raw;
 
             $data = $this->normalizeForModel($raw);
-
             $pk = $model->getKeyName();
             if (!empty($data[$pk])) $model->setAttribute($pk, $data[$pk]);
-
             $model->forceFill($data);
             $model->exists = true;
             return $model;
-        });
+        }, $hits);
+
+        return new Collection($models);
     }
 
     private function buildFieldMap(array $sourceKeys): array
@@ -259,6 +254,34 @@ abstract class ManticoreBuilderAbstract
         return null;
     }
 
+    protected function applyEloquentWith(Collection $items): Collection
+    {
+        if ($items->isEmpty() || empty($this->eagerQueue)) {
+            return $items;
+        }
+
+        $load = [];
+        $seen = [];
+
+        foreach ($this->eagerQueue as $entry) {
+            $name = $entry['name'];
+            if ($name === '' || isset($seen[$name])) {
+                continue;
+            }
+            $seen[$name] = true;
+
+            if ($entry['closure'] instanceof \Closure) {
+                $load[$name] = $entry['closure'];
+            } else {
+                $load[] = $name;
+            }
+        }
+        if (!empty($load)) {
+            $items->load($load);
+        }
+
+        return $items;
+    }
 
     protected function search(): Search
     {

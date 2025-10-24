@@ -9,6 +9,12 @@ class TestModel extends Model
 {
     protected $guarded = [];
 
+    protected $fillable = [
+        'EntityID',
+        'EntityName',
+        'CountryISO',
+    ];
+
     public function searchableAs()
     {
         return ['ttrentitytest'];
@@ -25,7 +31,7 @@ class ManticoreBuilderTest extends TestCase
     protected function defineEnvironment($app)
     {
         $app['config']->set('manticore.host', '127.0.0.1');
-        $app['config']->set('manticore.port', 9306);
+        $app['config']->set('manticore.port', 9312);
         $app['config']->set('manticore.username', 'root'); 
         $app['config']->set('manticore.password', null);
         $app['config']->set('manticore.transport', 'http');
@@ -223,12 +229,12 @@ class ManticoreBuilderTest extends TestCase
             ->groupBy('countryiso')
             ->limit(5)
             ->get();
-
+        
         $this->assertIsIterable($results);
         $this->assertLessThanOrEqual(5, $results->count());
 
         foreach ($results as $result) {
-            $this->assertNotEmpty($result->countryiso);
+            $this->assertNotEmpty($result->countryiso ?? $result->CountryISO);
             $this->assertGreaterThan(0, $result->total);
         }
     }
@@ -259,8 +265,8 @@ class ManticoreBuilderTest extends TestCase
         
         $this->assertIsIterable($results);
         foreach ($results as $result) {
-            $this->assertNotEmpty($result->entityid);
-            $this->assertNotEmpty($result->entityname);
+            $this->assertNotEmpty($result->entityid ?? $result->EntityID);
+            $this->assertNotEmpty($result->entityname ?? $result->EntityName);
         }
     }
 

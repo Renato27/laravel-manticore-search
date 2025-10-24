@@ -15,6 +15,52 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         return $this;
     }
 
+    public function with(array|string ...$relations): static
+    {
+        $push = function (string $name, $val = null) {
+            $closure = null;
+
+            if (str_contains($name, ':')) {
+                [$relation, $cols] = explode(':', $name, 2);
+                $colsArr = array_values(array_filter(array_map('trim', explode(',', $cols))));
+                $closure = function ($q) use ($colsArr) {
+                    $cols = $colsArr;
+                    $pk = $q->getModel()->getKeyName();
+                    $fillable = $q->getModel()->getFillable();
+                    if ($pk && !in_array($pk, $cols, true) && in_array($pk, $fillable, true)) {
+                        $cols[] = $pk;
+                    }
+
+                    $q->select($cols);
+                };
+
+                $name = $relation;
+            } elseif ($val instanceof \Closure) {
+                $closure = $val;
+            } elseif (is_array($val) && empty($val)) {
+                $closure = null;
+            }
+
+            $this->eagerQueue[] = ['name' => $name, 'closure' => $closure];
+        };
+
+        foreach ($relations as $rel) {
+            if (is_string($rel)) {
+                $push($rel);
+            } elseif (is_array($rel)) {
+                foreach ($rel as $k => $v) {
+                    if (is_int($k) && is_string($v)) {
+                        $push($v);
+                    } elseif (is_string($k)) {
+                        $push($k, $v);
+                    }
+                }
+            }
+        }
+
+        return $this;
+    }
+
     public function match(string $value): static
     {
         $this->match = $value;
@@ -169,7 +215,8 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         }
 
         $results = $this->search()->get();
-        return $this->resolveResults($results);
+        $col = $this->resolveResults($results);
+        return $this->applyEloquentWith($col);
     }
 
     public function toSql(): string
@@ -210,14 +257,17 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 
         if ($this->rawQuery) {
             $results = $this->fetchRawQuery();
+            $total = $results->count();
         }else{
             $resultSet = $this->search()->get();
             $results = $this->resolveResults($resultSet);
+            $results = $this->applyEloquentWith($results);
+            $total = $resultSet ? $resultSet->getTotal() : $results->count();
         }
        
         return new LengthAwarePaginator(
             $results,
-            $resultSet ? $resultSet->getTotal() : $results->count(),
+            $total,
             $perPage,
             $page,
             ['path' => LengthAwarePaginator::resolveCurrentPath()]
