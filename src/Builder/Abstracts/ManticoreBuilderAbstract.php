@@ -374,6 +374,22 @@ abstract class ManticoreBuilderAbstract
         return !empty($this->groupBy) ? 'GROUP BY ' . implode(', ', $this->groupBy) : '';
     }
 
+    protected function buildOrderByClause(): string
+    {
+        if (empty($this->sort)) {
+            return '';
+        }
+
+        $orders = [];
+        foreach ($this->sort as $s) {
+            foreach ($s as $field => $dir) {
+                $orders[] = "`{$field}` " . strtoupper($dir);
+            }
+        }
+
+        return 'ORDER BY ' . implode(', ', $orders);
+    }
+
     protected function buildHavingClause(): string
     {
         return !empty($this->having) ? 'HAVING ' . implode(' AND ', $this->having) : '';
@@ -406,10 +422,11 @@ abstract class ManticoreBuilderAbstract
         $select   = $this->buildSelectClause();
         $where    = $this->buildWhereClause();
         $groupBy  = $this->buildGroupByClause();
+        $orderBy  = $this->buildOrderByClause();
         $having   = $this->buildHavingClause();
         $limit    = $this->buildLimitClause();
-        $option  = $this->buildOptionClause();
+        $option   = $this->buildOptionClause();
 
-        return trim("SELECT {$select} FROM {$this->resolveIndexName()} {$where} {$groupBy} {$having} {$limit} {$option}");
+        return trim("SELECT {$select} FROM {$this->resolveIndexName()} {$where} {$groupBy} {$having} {$orderBy} {$limit} {$option}");
     }
 }

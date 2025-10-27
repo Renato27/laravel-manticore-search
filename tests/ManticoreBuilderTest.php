@@ -239,6 +239,25 @@ class ManticoreBuilderTest extends TestCase
         }
     }
 
+    public function test_order_by_works()
+    {
+        $results = (new ManticoreBuilder(new TestModel()))
+            ->whereBetween('entityid', [1, 999999999])
+            ->orderBy('entityid', 'desc')
+            ->limit(5)
+            ->get();
+
+        $this->assertIsIterable($results);
+        $this->assertLessThanOrEqual(5, $results->count());
+
+        $previousEntityId = PHP_INT_MAX;
+        foreach ($results as $result) {
+            $currentEntityId = $result->entityid ?? $result->EntityID;
+            $this->assertLessThanOrEqual($previousEntityId, $currentEntityId);
+            $previousEntityId = $currentEntityId;
+        }
+    }
+
     public function test_having_clause_works()
     {
         $results = (new ManticoreBuilder(new TestModel()))

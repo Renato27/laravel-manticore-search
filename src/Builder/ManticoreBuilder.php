@@ -145,9 +145,23 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         return $this;
     }
 
-    public function orderBy(string $field, string $dir = 'asc'): static
+    public function orderBy($column, $direction = null): static
     {
-        $this->sort[] = [$field => $dir];
+        if (is_array($column)) {
+            foreach ($column as $col => $dir) {
+                if (is_int($col)) {
+                    $this->sort[] = [(string)$dir => 'asc'];
+                } else {
+                    $d = strtolower((string)$dir) === 'desc' ? 'desc' : 'asc';
+                    $this->sort[] = [(string)$col => $d];
+                }
+            }
+            return $this;
+        }
+
+        $dir = strtolower((string)($direction ?? 'asc')) === 'desc' ? 'desc' : 'asc';
+        $this->sort[] = [(string)$column => $dir];
+
         return $this;
     }
 
