@@ -61,9 +61,12 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         return $this;
     }
 
-    public function match(string $value): static
+    public function match(string $keywords, ?string $field = null): static
     {
-        $this->match = $value;
+        $this->match[] = [
+            'field' => $field,
+            'keywords' => $keywords
+        ];
         return $this;
     }
 
