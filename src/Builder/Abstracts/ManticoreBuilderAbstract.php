@@ -15,7 +15,7 @@ use Manticoresearch\Table;
 abstract class ManticoreBuilderAbstract
 {
     protected $model;
-    protected $match = null;
+    protected array $match = [];
     protected array $must = [];
     protected array $should = [];
     protected array $mustNot = [];
@@ -293,8 +293,11 @@ abstract class ManticoreBuilderAbstract
         $bool = new \Manticoresearch\Query\BoolQuery();
 
         if ($this->match) {
-            $match = new \Manticoresearch\Query\MatchQuery($this->match, '*');
-            $bool->must($match);
+            foreach($this->match as $match)
+            {
+                $match = new \Manticoresearch\Query\MatchQuery($match['keywords'], $match['field']);
+                $bool->must($match);
+            }
         }
 
         foreach ($this->must as $filter) {
