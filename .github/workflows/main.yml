@@ -109,5 +109,11 @@ jobs:
           done
           echo "Seed ok."
 
+      - name: Show environment
+        run: |
+          php -v
+          php -m | sort
+          composer show manticoresoftware/manticoresearch-php | head -n 10
+          
       - name: Run PHPUnit
         run: vendor/bin/phpunit --colors=always
