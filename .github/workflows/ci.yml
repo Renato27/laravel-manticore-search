@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [ main, master ]
+  push:
+    branches: [ main, master ]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+
+    services:
+      manticore:
+        image: manticoresearch/manticore:latest
+        ports:
+          - "9312:9308"
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.2", "8.3"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: ~/.composer/cache/files
+          key: composer-${{ runner.os }}-${{ matrix.php }}-${{ hashFiles('**/composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-${{ matrix.php }}-
+
+      - name: Install deps
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Wait for Manticore (HTTP on 9312)
+        run: |
+          for i in {1..60}; do
+            if curl -sS -X POST 'http://127.0.0.1:9312/sql' \
+              --data-urlencode "mode=raw" \
+              --data-urlencode "query=SHOW TABLES" >/dev/null; then
+              echo "Manticore is up"; break
+            fi
+            echo "Waiting Manticore... ($i)"
+            sleep 2
+          done
+
+      - name: Create index and seed test data
+        run: |
+          read -r -d '' SQL <<'EOSQL'
+          DROP TABLE IF EXISTS ttrentitytest;
+          CREATE TABLE ttrentitytest(
+            EntityID   bigint,
+            EntityName text,
+            CountryISO string
+          );
+
+          INSERT INTO ttrentitytest (id, EntityID, EntityName, CountryISO) VALUES
+            (1,   1,  'Empresa de Portugal A', 'PT'),
+            (2,   2,  'Empresa de Portugal B', 'PT'),
+            (3,   3,  'Companhia Portuguesa',  'PT'),
+            (4,   4,  'Sociedade de Portugal', 'PT'),
+            (5,   5,  'Holding Portugal',      'PT'),
+            (6,   6,  'Empresa de España A',   'ES'),
+            (7,   7,  'Empresa de España B',   'ES'),
+            (8,   8,  'Grupo Ibérico',         'ES'),
+            (9,   9,  'Empresa Lusa',          'PT'),
+            (10, 10,  'Portugal Ventures',     'PT'),
+            (11, 11,  'Portugal Foods',        'PT'),
+            (12, 12,  'Iberia Portugal',       'PT'),
+            (13, 13,  'Iberia Spain',          'ES'),
+            (14, 14,  'Lusitania SA',          'PT'),
+            (15, 15,  'Madrid Corp',           'ES'),
+            (16, 16,  'Porto Tech',            'PT'),
+            (17, 17,  'Lisboa Labs',           'PT'),
+            (18, 18,  'Barcelona Labs',        'ES'),
+            (19, 19,  'Coimbra Data',          'PT'),
+            (20, 20,  'Valencia Data',         'ES');
+
+          INSERT INTO ttrentitytest (id, EntityID, EntityName, CountryISO) VALUES
+            (101, 1001, 'Dup Portugal 1', 'PT'),
+            (102, 1001, 'Dup Portugal 2', 'PT'),
+            (103, 2002, 'Dup Spain 1',    'ES'),
+            (104, 2002, 'Dup Spain 2',    'ES');
+          EOSQL
+
+          curl -sS -X POST 'http://127.0.0.1:9312/sql' \
+            --data-urlencode "mode=raw" \
+            --data-urlencode "query=$SQL" \
+            | jq .
+
+      - name: Run PHPUnit
+        run: vendor/bin/phpunit --colors=always
