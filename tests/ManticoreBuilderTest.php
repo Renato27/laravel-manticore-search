@@ -28,7 +28,7 @@ class ManticoreBuilderTest extends TestCase
         return [ManticoreServiceProvider::class];
     }
 
-    protected function defineEnvironment($app)
+    protected function getEnvironmentSetUp($app)
     {
         $app['config']->set('manticore.host', '127.0.0.1');
         $app['config']->set('manticore.port', 9312);
@@ -38,6 +38,11 @@ class ManticoreBuilderTest extends TestCase
         $app['config']->set('manticore.timeout', 5);
         $app['config']->set('manticore.persistent', false);
         $app['config']->set('manticore.max_matches', 10000);
+    }
+
+    protected function defineEnvironment($app)
+    {
+       $this->getEnvironmentSetUp($app);
     }
 
     public function it_applies_max_matches_from_parameter()
