@@ -34,7 +34,7 @@ class ManticoreBuilderTest extends TestCase
         $app['config']->set('manticore.port', 9312);
         $app['config']->set('manticore.username', 'root'); 
         $app['config']->set('manticore.password', null);
-        $app['config']->set('manticore.transport', 'Http');
+        $app['config']->set('manticore.transport', 'http');
         $app['config']->set('manticore.timeout', 5);
         $app['config']->set('manticore.persistent', false);
         $app['config']->set('manticore.max_matches', 10000);
