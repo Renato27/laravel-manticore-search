@@ -31,6 +31,7 @@ jobs:
           php-version: ${{ matrix.php }}
           coverage: none
           tools: composer:v2
+          extensions: curl, mbstring
 
       - name: Cache Composer
         uses: actions/cache@v4
