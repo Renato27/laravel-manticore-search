@@ -90,7 +90,13 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             $operator = $operatorOrValue;
         }
 
-        $this->must[] = $this->makeFilter($field, $operator, $value);
+        // Handle negation operators by adding to mustNot array
+        if (in_array(strtolower($operator), ['!=', '<>'])) {
+            $this->mustNot[] = $this->makeFilter($field, '=', $value);
+        } else {
+            $this->must[] = $this->makeFilter($field, $operator, $value);
+        }
+        
         return $this;
     }
 
