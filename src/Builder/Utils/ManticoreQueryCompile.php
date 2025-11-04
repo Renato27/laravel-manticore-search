@@ -21,12 +21,14 @@ class ManticoreQueryCompile
         return $sql;
     }
 
-    public static function toSqlWhereClause(array $must, array $should, array $mustNot, ?string $match = null): string
+    public static function toSqlWhereClause(array $must, array $should, array $mustNot, ?array $match = null): string
     {
         $clauses = [];
 
         if ($match) {
-            $clauses[] = "MATCH('@* " . addslashes($match) . "')";
+            foreach($match as $m) {
+                $clauses[] = "MATCH('@{$m['field']} " . addslashes($m['keywords']) . "')";
+            }
         }
 
         if (!empty($must)) {
