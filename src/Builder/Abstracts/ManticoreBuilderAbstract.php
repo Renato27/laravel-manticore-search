@@ -354,7 +354,6 @@ abstract class ManticoreBuilderAbstract
     {
         return match (strtolower($operator)) {
             '=', '=='   => new \Manticoresearch\Query\Equals($field, $value),
-            '!=', '<>'  => new \Manticoresearch\Query\Equals($field, $value),
             '>'         => new \Manticoresearch\Query\Range($field, ['gt' => $value]),
             '>='        => new \Manticoresearch\Query\Range($field, ['gte' => $value]),
             '<'         => new \Manticoresearch\Query\Range($field, ['lt' => $value]),

@@ -190,6 +190,106 @@ class ManticoreBuilderTest extends TestCase
         );
     }
 
+    public function test_where_not_equals_operators()
+    {
+        // Test != operator
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->where('countryiso', '!=', 'PT')
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+        
+        $this->assertStringContainsString(
+            '`countryiso` <> \'PT\'',
+            $sql,
+            '!= operator should generate <> in SQL'
+        );
+
+        // Test <> operator
+        $builder2 = (new ManticoreBuilder(new TestModel()))
+            ->where('countryiso', '<>', 'ES')
+            ->limit(10);
+
+        $sql2 = $method->invoke($builder2);
+        
+        $this->assertStringContainsString(
+            '`countryiso` <> \'ES\'',
+            $sql2,
+            '<> operator should generate <> in SQL'
+        );
+    }
+
+    public function test_where_not_method()
+    {
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->whereNot('countryiso', 'PT')
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+        
+        $this->assertStringContainsString(
+            '`countryiso` <> \'PT\'',
+            $sql,
+            'whereNot method should generate <> in SQL'
+        );
+    }
+
+    public function test_where_not_with_operators()
+    {
+        // Test whereNot with > operator (should become <=)
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->whereNot('entityid', '>', 1000)
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+        
+        $this->assertStringContainsString(
+            '`entityid` <= 1000',
+            $sql,
+            'whereNot with > operator should generate <= in SQL'
+        );
+
+        // Test whereNot with >= operator (should become <)
+        $builder2 = (new ManticoreBuilder(new TestModel()))
+            ->whereNot('entityid', '>=', 1000)
+            ->limit(10);
+
+        $sql2 = $method->invoke($builder2);
+        
+        $this->assertStringContainsString(
+            '`entityid` < 1000',
+            $sql2,
+            'whereNot with >= operator should generate < in SQL'
+        );
+    }
+
+    public function test_where_not_in_method()
+    {
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->whereNotIn('countryiso', ['PT', 'ES', 'FR'])
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+        
+        $this->assertStringContainsString(
+            '`countryiso` NOT IN (\'PT\', \'ES\', \'FR\')',
+            $sql,
+            'whereNotIn method should generate NOT IN in SQL'
+        );
+    }
+
     public function test_basic_match_query()
     {
         $results = (new ManticoreBuilder(new TestModel()))
