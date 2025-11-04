@@ -15,6 +15,11 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         return $this;
     }
 
+    public function option(string $key, mixed $value): static {
+        $this->option[$key] = $value;
+        return $this;
+    }
+
     public function with(array|string ...$relations): static
     {
         $push = function (string $name, $val = null) {
@@ -168,6 +173,12 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         return $this;
     }
 
+    public function expression($name, $exp): self
+    {
+		$this->scriptFields[$name] = $exp;
+		return $this;
+	}
+
     public function limit(int $limit): static
     {
         $this->limit = $limit;
@@ -210,7 +221,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             $this->having,
             is_array($conditions) ? $conditions : [$conditions]
         );
-    
+
         return $this;
     }
 
@@ -281,7 +292,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             $results = $this->applyEloquentWith($results);
             $total = $resultSet ? $resultSet->getTotal() : $results->count();
         }
-       
+
         return new LengthAwarePaginator(
             $results,
             $total,
@@ -320,7 +331,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
     {
         return $this->getClient();
     }
-    
+
     public function when($condition, callable $callback, ?callable $default = null): static
     {
         if ($condition) {

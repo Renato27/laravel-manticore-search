@@ -15,6 +15,7 @@ use Manticoresearch\Table;
 abstract class ManticoreBuilderAbstract
 {
     protected $model;
+    protected array $option = [];
     protected array $match = [];
     protected array $must = [];
     protected array $should = [];
@@ -31,6 +32,7 @@ abstract class ManticoreBuilderAbstract
     protected array $having = [];
     protected ?int $maxMatches = null;
     protected array $eagerQueue = [];
+    protected array $scriptFields = [];
 
     public function __construct($model)
     {
@@ -190,7 +192,7 @@ abstract class ManticoreBuilderAbstract
                 if (isset($sourceKeyIndex[$vLower]) && !in_array($sourceKeyIndex[$vLower], array_keys($map), true)) {
                     $fromOriginal = $sourceKeyIndex[$vLower];
                     $map[$fromOriginal] = $col;
-                    break; 
+                    break;
                 }
             }
         }
@@ -398,10 +400,24 @@ abstract class ManticoreBuilderAbstract
         return !empty($this->having) ? 'HAVING ' . implode(' AND ', $this->having) : '';
     }
 
-    private function buildOptionClause(): string
+  private function buildOptionClause(): string
     {
-        $max = $this->maxMatches ?? config('manticore.max_matches');
-        return $max ? "OPTION max_matches={$max}" : '';
+        $defaultMaxMatches = config('manticore.max_matches', 1000);
+        $maxMatches = $this->maxMatches ?? $defaultMaxMatches;
+        $clauses = [];
+        $clauses[] = "max_matches={$maxMatches}";
+
+        foreach ($this->option as $key => $value) {
+            if ($value !== null) {
+                if (is_bool($value)) {
+                    $value = $value ? '1' : '0';
+                }
+
+                $clauses[] = "{$key}={$value}";
+            }
+        }
+
+        return 'OPTION ' . implode(',', $clauses);
     }
 
     protected function buildLimitClause(): string
@@ -429,7 +445,6 @@ abstract class ManticoreBuilderAbstract
         $having   = $this->buildHavingClause();
         $limit    = $this->buildLimitClause();
         $option   = $this->buildOptionClause();
-
         return trim("SELECT {$select} FROM {$this->resolveIndexName()} {$where} {$groupBy} {$having} {$orderBy} {$limit} {$option}");
     }
 }
