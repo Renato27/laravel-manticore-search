@@ -60,7 +60,7 @@ class ManticoreBuilderTest extends TestCase
         $this->assertStringContainsString(
             'OPTION max_matches=20000',
             $sql,
-            'max_matches definido via parâmetro não foi propagado para a query'
+            'max_matches defined via parameter was not propagated to the query'
         );
     }
 
@@ -81,7 +81,212 @@ class ManticoreBuilderTest extends TestCase
         $this->assertStringContainsString(
             'OPTION max_matches=8000',
             $sql,
-            'max_matches do config não foi aplicado quando nenhum valor explícito foi passado'
+            'max_matches from config was not applied when no explicit value was passed'
+        );
+    }
+
+    public function test_option_method_adds_custom_options_to_query()
+    {
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->match('Portugal')
+            ->option('ranker', 'bm25')
+            ->option('field_weights', '(title=10,content=1)')
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+        
+        $this->assertStringContainsString(
+            'OPTION max_matches=',
+            $sql,
+            'Default max_matches option should be present'
+        );
+        
+        $this->assertStringContainsString(
+            'ranker=bm25',
+            $sql,
+            'Custom ranker option was not added to the query'
+        );
+        
+        $this->assertStringContainsString(
+            'field_weights=(title=10,content=1)',
+            $sql,
+            'Custom field_weights option was not added to the query'
+        );
+    }
+
+    public function test_option_method_handles_boolean_values()
+    {
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->match('Portugal')
+            ->option('sort_method', 'pq')
+            ->option('accurate_aggregation', true)
+            ->option('threads', false)
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+        
+        $this->assertStringContainsString(
+            'sort_method=pq',
+            $sql,
+            'String option value was not properly added'
+        );
+        
+        $this->assertStringContainsString(
+            'accurate_aggregation=1',
+            $sql,
+            'Boolean true option was not converted to 1'
+        );
+        
+        $this->assertStringContainsString(
+            'threads=0',
+            $sql,
+            'Boolean false option was not converted to 0'
+        );
+    }
+
+    public function test_option_method_with_multiple_options()
+    {
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->match('Portugal')
+            ->option('ranker', 'bm25')
+            ->option('max_query_time', '1000')
+            ->option('retry_count', '3')
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+        
+        $this->assertStringContainsString(
+            'ranker=bm25',
+            $sql,
+            'First option should be included'
+        );
+        
+        $this->assertStringContainsString(
+            'max_query_time=1000',
+            $sql,
+            'Second option should be included'
+        );
+        
+        $this->assertStringContainsString(
+            'retry_count=3',
+            $sql,
+            'Third option should be included'
+        );
+        
+        // Verify options are comma-separated
+        $this->assertMatchesRegularExpression(
+            '/OPTION.*ranker=bm25.*,.*max_query_time=1000.*,.*retry_count=3/',
+            $sql,
+            'Options should be comma-separated'
+        );
+    }
+
+    public function test_where_not_equals_operators()
+    {
+        // Test != operator
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->where('countryiso', '!=', 'PT')
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+        
+        $this->assertStringContainsString(
+            '`countryiso` <> \'PT\'',
+            $sql,
+            '!= operator should generate <> in SQL'
+        );
+
+        // Test <> operator
+        $builder2 = (new ManticoreBuilder(new TestModel()))
+            ->where('countryiso', '<>', 'ES')
+            ->limit(10);
+
+        $sql2 = $method->invoke($builder2);
+        
+        $this->assertStringContainsString(
+            '`countryiso` <> \'ES\'',
+            $sql2,
+            '<> operator should generate <> in SQL'
+        );
+    }
+
+    public function test_where_not_method()
+    {
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->whereNot('countryiso', 'PT')
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+        
+        $this->assertStringContainsString(
+            '`countryiso` <> \'PT\'',
+            $sql,
+            'whereNot method should generate <> in SQL'
+        );
+    }
+
+    public function test_where_not_with_operators()
+    {
+        // Test whereNot with > operator (should become <=)
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->whereNot('entityid', '>', 1000)
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+        
+        $this->assertStringContainsString(
+            '`entityid` <= 1000',
+            $sql,
+            'whereNot with > operator should generate <= in SQL'
+        );
+
+        // Test whereNot with >= operator (should become <)
+        $builder2 = (new ManticoreBuilder(new TestModel()))
+            ->whereNot('entityid', '>=', 1000)
+            ->limit(10);
+
+        $sql2 = $method->invoke($builder2);
+        
+        $this->assertStringContainsString(
+            '`entityid` < 1000',
+            $sql2,
+            'whereNot with >= operator should generate < in SQL'
+        );
+    }
+
+    public function test_where_not_in_method()
+    {
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->whereNotIn('countryiso', ['PT', 'ES', 'FR'])
+            ->limit(10);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+        
+        $this->assertStringContainsString(
+            '`countryiso` NOT IN (\'PT\', \'ES\', \'FR\')',
+            $sql,
+            'whereNotIn method should generate NOT IN in SQL'
         );
     }
 

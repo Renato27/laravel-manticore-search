@@ -42,7 +42,7 @@ class ManticoreQueryCompile
         }
 
         if (!empty($mustNot)) {
-            $notParts = array_map(fn($cond) => 'NOT (' . self::compileConditionSafe($cond) . ')', $mustNot);
+            $notParts = array_map([self::class, 'compileConditionSafeNegated'], $mustNot);
             $clauses[] = implode(' AND ', $notParts);
         }
 
@@ -73,17 +73,31 @@ class ManticoreQueryCompile
         return self::compileCondition($condition);
     }
 
-    protected static function compileCondition($condition): string
+    protected static function compileConditionSafeNegated($condition): string
+    {
+        if (is_object($condition) && method_exists($condition, 'toArray')) {
+            $condition = $condition->toArray();
+        }
+
+        return self::compileCondition($condition, true);
+    }
+
+    protected static function compileCondition($condition, bool $negated = false): string
     {
         if (isset($condition['match'])) {
             $value = addslashes($condition['match']['*'] ?? reset($condition['match']));
+            if ($negated) {
+                // For negated MATCH, we need to use a different approach
+                return "NOT MATCH('@* {$value}')";
+            }
             return "MATCH('@* {$value}')";
         }
 
         if (isset($condition['equals'])) {
             foreach ($condition['equals'] as $field => $value) {
                 $val = is_numeric($value) ? $value : "'" . addslashes($value) . "'";
-                return "`{$field}` = {$val}";
+                $operator = $negated ? '<>' : '=';
+                return "`{$field}` {$operator} {$val}";
             }
         }
 
@@ -92,7 +106,8 @@ class ManticoreQueryCompile
                 $quoted = array_map(function ($v) {
                     return is_numeric($v) ? $v : "'" . addslashes($v) . "'";
                 }, $values);
-                return "`{$field}` IN (" . implode(', ', $quoted) . ")";
+                $operator = $negated ? 'NOT IN' : 'IN';
+                return "`{$field}` {$operator} (" . implode(', ', $quoted) . ")";
             }
         }
 
@@ -101,14 +116,18 @@ class ManticoreQueryCompile
                 $rangeParts = [];
                 foreach ($ranges as $op => $val) {
                     $symbol = match ($op) {
-                        'gte' => '>=',
-                        'lte' => '<=',
-                        'gt'  => '>',
-                        'lt'  => '<',
-                        default => '='
+                        'gte' => $negated ? '<' : '>=',
+                        'lte' => $negated ? '>' : '<=',
+                        'gt'  => $negated ? '<=' : '>',
+                        'lt'  => $negated ? '>=' : '<',
+                        default => $negated ? '<>' : '='
                     };
                     $compiledVal = is_numeric($val) ? $val : "'" . addslashes($val) . "'";
                     $rangeParts[] = "`{$field}` {$symbol} {$compiledVal}";
+                }
+                if ($negated && count($rangeParts) > 1) {
+                    // For negated ranges with multiple conditions, use OR instead of AND
+                    return implode(' OR ', $rangeParts);
                 }
                 return implode(' AND ', $rangeParts);
             }
