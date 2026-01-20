@@ -77,7 +77,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 
     public function maxMatches(int $value): static
     {
-        $this->maxMatches = $value;
+        $this->option['max_matches'] = $value ?? config('manticore.max_matches');
         return $this;
     }
 
@@ -255,8 +255,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 
     public function toSql(): string
     {
-        $compiled = $this->search()->compile();
-        return ManticoreQueryCompile::toRawSql($compiled);
+        return $this->buildSqlQuery();
     }
 
     public function first()
