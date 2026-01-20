@@ -342,9 +342,10 @@ abstract class ManticoreBuilderAbstract
             }
         }
 
-        $max = $this->maxMatches ?? config('manticore.max_matches');
-        if ($max !== null) {
-            $search->option('max_matches', $max);
+        if (!empty($this->option)) {
+            foreach ($this->option as $key => $value) {
+                $search->option($key, $value);
+            }
         }
 
         return $search;
