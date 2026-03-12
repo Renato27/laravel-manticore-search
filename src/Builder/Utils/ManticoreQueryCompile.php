@@ -69,7 +69,7 @@ class ManticoreQueryCompile
             $compiled = $negated
                 ? self::compileConditionSafeNegated($condition)
                 : self::compileConditionSafe($condition);
-
+            
             if (!$compiled) {
                 continue;
             }
@@ -80,7 +80,7 @@ class ManticoreQueryCompile
                 $clauses[] = "{$boolean} ({$compiled})";
             }
         }
-
+    
         return implode(' ', $clauses);
     }
 
@@ -122,7 +122,6 @@ class ManticoreQueryCompile
         if (isset($condition['match'])) {
             $value = addslashes($condition['match']['*'] ?? reset($condition['match']));
             if ($negated) {
-                // For negated MATCH, we need to use a different approach
                 return "NOT MATCH('@* {$value}')";
             }
             return "MATCH('@* {$value}')";
@@ -161,7 +160,6 @@ class ManticoreQueryCompile
                     $rangeParts[] = "`{$field}` {$symbol} {$compiledVal}";
                 }
                 if ($negated && count($rangeParts) > 1) {
-                    // For negated ranges with multiple conditions, use OR instead of AND
                     return implode(' OR ', $rangeParts);
                 }
                 return implode(' AND ', $rangeParts);

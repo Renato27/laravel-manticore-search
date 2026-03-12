@@ -86,65 +86,175 @@ abstract class ManticoreBuilderAbstract
         return $table;
     }
 
-    protected function fetchRawQuery(): Collection
+     protected function fetchRawQuery(): Collection
     {
         $client = $this->getClient();
-
         $results = $client->sql($this->rawQuery, $this->rawQueryMode);
-        $col = $this->resolveResults($results);
-        return $this->applyEloquentWith($col);
+
+        $rows = $this->extractRawRows($results);
+        $models = $this->hydrateModelsFromRows($rows);
+
+        return $this->applyEloquentWith($models);
     }
 
     protected function resolveResults($results): Collection
     {
-        if (is_array($results)) {
-            return $this->resolveResultsArray($results);
-        } else {
-            return $this->resolveResultsDefault($results);
-        }
+        $rows = $this->extractRawRows($results);
+
+        return $this->hydrateModelsFromRows($rows);
     }
 
-    private function resolveResultsDefault($results): Collection
+    protected function extractRawRows($results): array
+    {
+        if (is_array($results)) {
+            return $this->extractRawRowsFromArrayResult($results);
+        }
+
+        return $this->extractRawRowsFromDefaultResult($results);
+    }
+
+    protected function extractRawRowsFromDefaultResult($results): array
     {
         $hits = iterator_to_array($results);
-        $models = array_map(function ($hit) {
-            $model = clone $this->model;
+
+        return array_map(function ($hit) {
             $id = $this->getID($hit);
             $raw = $hit->getData() ?? [];
-            if (filled($id)) $raw = ['id' => $id] + $raw;
-            
-            $data = $this->normalizeForModel($raw);
-            $pk = $model->getKeyName();
-            if (!empty($data[$pk])) $model->setAttribute($pk, $data[$pk]);
-            $model->forceFill($data);
-            try { $highlight = $hit->getHighlight(); if (!empty($highlight)) $model->highlight = $highlight; } catch (\Throwable $e) {}
-            $model->exists = true;
-            return $model;
-        }, $hits);
 
-        return new Collection($models);
+            if (filled($id)) {
+                $raw = ['id' => $id] + $raw;
+            }
+
+            $data = $this->normalizeForModel($raw);
+
+            try {
+                $highlight = $hit->getHighlight();
+                if (!empty($highlight)) {
+                    $data['_highlight'] = $highlight;
+                }
+            } catch (\Throwable $e) {
+            }
+
+            return $data;
+        }, $hits);
     }
 
-    private function resolveResultsArray($results): Collection
+    protected function extractRawRowsFromArrayResult(array $results): array
     {
         $hits = $results['hits']['hits'] ?? [];
         $hits = iterator_to_array($hits);
 
-        $models = array_map(function ($hit) {
-            $model = clone $this->model;
+        return array_map(function ($hit) {
             $id = $this->getID($hit);
             $raw = $hit['_source'] ?? [];
-            if (filled($id)) $raw = ['id' => $id] + $raw;
 
-            $data = $this->normalizeForModel($raw);
-            $pk = $model->getKeyName();
-            if (!empty($data[$pk])) $model->setAttribute($pk, $data[$pk]);
-            $model->forceFill($data);
-            $model->exists = true;
-            return $model;
+            if (filled($id)) {
+                $raw = ['id' => $id] + $raw;
+            }
+
+            return $this->normalizeForModel($raw);
         }, $hits);
+    }
+
+    protected function hydrateModelsFromRows(array $rows): Collection
+    {
+        $models = array_map(function (array $row) {
+            return $this->hydrateModelFromRow($row);
+        }, $rows);
 
         return new Collection($models);
+    }
+
+    protected function hydrateModelFromRow(array $row)
+    {
+        $model = clone $this->model;
+        $highlight = $row['_highlight'] ?? null;
+        unset($row['_highlight']);
+
+        $pk = $model->getKeyName();
+
+        if (!empty($row[$pk])) {
+            $model->setAttribute($pk, $row[$pk]);
+        }
+
+        $model->forceFill($row);
+
+        if (!empty($highlight)) {
+            $model->highlight = $highlight;
+        }
+
+        $model->exists = true;
+
+        return $model;
+    }
+
+    protected function consolidateRawRows(
+        array $rows,
+        string $groupField,
+        string $historyAttribute = 'history',
+        bool $preserveGroupFieldInHistory = true
+    ): array {
+        if (empty($rows)) {
+            return [];
+        }
+
+        $grouped = [];
+        foreach ($rows as $row) {
+            $groupValue = $row[$groupField] ?? null;
+            $grouped[(string) $groupValue][] = $row;
+        }
+
+        $consolidated = [];
+
+        foreach ($grouped as $groupRows) {
+            $allKeys = [];
+            foreach ($groupRows as $row) {
+                $allKeys = array_merge($allKeys, array_keys($row));
+            }
+            $allKeys = array_values(array_unique($allKeys));
+
+            $common = [];
+            $variableKeys = [];
+
+            foreach ($allKeys as $key) {
+                $values = array_map(
+                    fn (array $row) => array_key_exists($key, $row) ? $row[$key] : null,
+                    $groupRows
+                );
+
+                $serialized = array_map(
+                    fn ($value) => serialize($value),
+                    $values
+                );
+
+                if (count(array_unique($serialized)) === 1) {
+                    $common[$key] = $values[0];
+                } else {
+                    $variableKeys[] = $key;
+                }
+            }
+
+            $history = array_map(function (array $row) use ($variableKeys, $groupField, $preserveGroupFieldInHistory) {
+                $snapshot = [];
+
+                foreach ($variableKeys as $key) {
+                    if (!$preserveGroupFieldInHistory && $key === $groupField) {
+                        continue;
+                    }
+
+                    if (array_key_exists($key, $row)) {
+                        $snapshot[$key] = $row[$key];
+                    }
+                }
+
+                return $snapshot;
+            }, $groupRows);
+
+            $common[$historyAttribute] = array_values($history);
+            $consolidated[] = $common;
+        }
+
+        return $consolidated;
     }
 
     private function buildFieldMap(array $sourceKeys): array

@@ -90,7 +90,6 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             $operator = $operatorOrValue;
         }
 
-        // Handle negation operators by adding to mustNot array
         if (in_array(strtolower($operator), ['!=', '<>'])) {
             $this->mustNot[] = $this->makeFilter($field, '=', $value);
              $this->whereSequence[] = [
@@ -120,12 +119,18 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             $operator = $operatorOrValue;
         }
 
-        $this->should[] = $this->makeFilter($field, $operator, $value);
+        $filter = $this->makeFilter($field, $operator, $value);
+
+        if (!empty($this->must) && empty($this->should)) {
+            $this->should[] = array_pop($this->must);
+        }
+
+        $this->should[] = $filter;
 
         $this->whereSequence[] = [
             'boolean' => 'or',
             'negated' => false,
-            'condition' => $this->makeFilter($field, $operator, $value),
+            'condition' => $filter,
         ];
 
         return $this;
@@ -152,12 +157,22 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
     public function whereIn(string $field, array $values): static
     {
         $this->must[] = new \Manticoresearch\Query\In($field, $values);
+        $this->whereSequence[] = [
+            'boolean' => 'and',
+            'negated' => false,
+            'condition' => new \Manticoresearch\Query\In($field, $values),
+        ];
         return $this;
     }
 
     public function whereNotIn(string $field, array $values): static
     {
         $this->mustNot[] = new \Manticoresearch\Query\In($field, $values);
+        $this->whereSequence[] = [
+            'boolean' => 'and',
+            'negated' => true,
+            'condition' => new \Manticoresearch\Query\In($field, $values),
+        ];
         return $this;
     }
 
@@ -167,6 +182,14 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             'gte' => $range[0],
             'lte' => $range[1]
         ]);
+        $this->whereSequence[] = [
+            'boolean' => 'and',
+            'negated' => false,
+            'condition' => new \Manticoresearch\Query\Range($field, [
+                'gte' => $range[0],
+                'lte' => $range[1]
+            ]),
+        ];
         return $this;
     }
 
@@ -179,6 +202,17 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             ],
             'distance' => $distanceMeters
         ]);
+        $this->whereSequence[] = [
+            'boolean' => 'and',
+            'negated' => false,
+            'condition' => new \Manticoresearch\Query\Distance([
+                $field => [
+                    'lat' => $lat,
+                    'lon' => $lon,
+                ],
+                'distance' => $distanceMeters
+            ]),
+        ];
         return $this;
     }
 
@@ -260,7 +294,6 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         return $this->rawQuery($sql)->fetchRawQuery();
     }
 
-
     public function get(): Collection
     {
         if($this->rawQuery) {
@@ -272,8 +305,81 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         }
 
         $results = $this->search()->get();
-        $col = $this->resolveResults($results);
-        return $this->applyEloquentWith($col);
+        $rows = $this->extractRawRows($results);
+        $models = $this->hydrateModelsFromRows($rows);
+
+        return $this->applyEloquentWith($models);
+    }
+
+    public function consolidateBy(
+        string $groupField,
+        string $historyAttribute = 'history',
+        bool $preserveGroupFieldInHistory = true
+    ) {
+        $rows = $this->getRawRowsForCurrentQuery();
+
+        if (empty($rows)) {
+            return null;
+        }
+
+        $consolidatedRows = $this->consolidateRawRows(
+            $rows,
+            $groupField,
+            $historyAttribute,
+            $preserveGroupFieldInHistory
+        );
+
+        if (empty($consolidatedRows)) {
+            return null;
+        }
+
+        $models = $this->hydrateModelsFromRows([$consolidatedRows[0]]);
+        return $this->applyEloquentWith($models)->first();
+    }
+
+    public function consolidateAllBy(
+        string $groupField,
+        string $historyAttribute = 'history',
+        bool $preserveGroupFieldInHistory = true
+    ): Collection {
+        $rows = $this->getRawRowsForCurrentQuery();
+
+        if (empty($rows)) {
+            return collect();
+        }
+
+        $consolidatedRows = $this->consolidateRawRows(
+            $rows,
+            $groupField,
+            $historyAttribute,
+            $preserveGroupFieldInHistory
+        );
+
+        $models = $this->hydrateModelsFromRows($consolidatedRows);
+
+        return $this->applyEloquentWith($models);
+    }
+
+    protected function getRawRowsForCurrentQuery(): array
+    {
+        if ($this->rawQuery) {
+            $client = $this->getClient();
+            $results = $client->sql($this->rawQuery, $this->rawQueryMode);
+
+            return $this->extractRawRows($results);
+        }
+
+        if (!empty($this->groupBy) || !empty($this->having) || !empty($this->select)) {
+            $client = $this->getClient();
+            $sql = $this->buildSqlQuery();
+            $results = $client->sql($sql, false);
+
+            return $this->extractRawRows($results);
+        }
+
+        $results = $this->search()->get();
+
+        return $this->extractRawRows($results);
     }
 
     public function toSql(): string
@@ -316,8 +422,8 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             $total = $results->count();
         }else{
             $resultSet = $this->search()->get();
-            $results = $this->resolveResults($resultSet);
-            $results = $this->applyEloquentWith($results);
+            $rows = $this->extractRawRows($resultSet);
+            $results = $this->applyEloquentWith($this->hydrateModelsFromRows($rows));
             $total = $resultSet ? $resultSet->getTotal() : $results->count();
         }
 
