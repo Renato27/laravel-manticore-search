@@ -1,5 +1,5 @@
 {
-  "name": "renatomaldonado/manticore-laravel-search",
+  "name": "zuvinova/manticore-laravel-search",
   "description": "Laravel driver for Manticore Search using the official PHP client",
   "type": "library",
   "require": {
@@ -19,7 +19,7 @@
   "authors": [
     {
       "name": "renato maldonado",
-      "email": "mallldonado@gmail.com"
+      "email": "renato.maldonado@ttrdata.com"
     }
   ],
   "extra": {

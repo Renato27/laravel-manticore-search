@@ -5,7 +5,7 @@ A powerful integration of [Manticore Search](https://manticoresearch.com/) with 
 ## Installation
 
 ```bash
-composer require renatomaldonado/laravel-manticore-search
+composer require zuvinova/manticore-laravel-search
 ```
 
 ## Configuration
