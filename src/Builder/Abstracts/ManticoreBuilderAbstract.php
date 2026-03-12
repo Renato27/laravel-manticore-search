@@ -33,6 +33,7 @@ abstract class ManticoreBuilderAbstract
     protected ?int $maxMatches = null;
     protected array $eagerQueue = [];
     protected array $scriptFields = [];
+    protected array $whereSequence = [];
 
     public function __construct($model)
     {
@@ -111,7 +112,7 @@ abstract class ManticoreBuilderAbstract
             $id = $this->getID($hit);
             $raw = $hit->getData() ?? [];
             if (filled($id)) $raw = ['id' => $id] + $raw;
-
+            
             $data = $this->normalizeForModel($raw);
             $pk = $model->getKeyName();
             if (!empty($data[$pk])) $model->setAttribute($pk, $data[$pk]);
@@ -167,7 +168,7 @@ abstract class ManticoreBuilderAbstract
         }
 
         $candidates = array_unique(array_merge([$model->getKeyName()], $model->getFillable()));
-
+    
         $variants = function (string $name): array {
             $o = $name;
             $l = strtolower($name);
@@ -201,7 +202,7 @@ abstract class ManticoreBuilderAbstract
             $pk = $model->getKeyName();
             $map[$sourceKeyIndex['id']] = $pk;
         }
-
+        
         return $map;
     }
 
@@ -370,7 +371,10 @@ abstract class ManticoreBuilderAbstract
 
     protected function buildWhereClause(): string
     {
-        $clause = ManticoreQueryCompile::toSqlWhereClause($this->must, $this->should, $this->mustNot, $this->match);
+        $clause = ManticoreQueryCompile::toSqlWhereClauseFromSequence(
+            $this->whereSequence,
+            $this->match
+        );
         return $clause ? "WHERE {$clause}" : '';
     }
 
