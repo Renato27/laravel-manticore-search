@@ -49,6 +49,41 @@ class ManticoreQueryCompile
         return implode(' AND ', array_filter($clauses));
     }
 
+    public static function toSqlWhereClauseFromSequence(array $sequence, ?array $match = null): string
+    {
+        $clauses = [];
+
+        if ($match) {
+            foreach ($match as $m) {
+                $field = !empty($m['field']) ? "@{$m['field']}" : '@*';
+                $keywords = addslashes($m['keywords']);
+                $clauses[] = "MATCH('{$field} {$keywords}')";
+            }
+        }
+
+        foreach ($sequence as $index => $item) {
+            $boolean = strtoupper($item['boolean'] ?? 'AND');
+            $negated = (bool)($item['negated'] ?? false);
+            $condition = $item['condition'] ?? null;
+
+            $compiled = $negated
+                ? self::compileConditionSafeNegated($condition)
+                : self::compileConditionSafe($condition);
+
+            if (!$compiled) {
+                continue;
+            }
+
+            if (empty($clauses) && $index === 0) {
+                $clauses[] = "({$compiled})";
+            } else {
+                $clauses[] = "{$boolean} ({$compiled})";
+            }
+        }
+
+        return implode(' ', $clauses);
+    }
+
     protected static function buildWhereClause(array $query): string
     {
         if (!isset($query['bool'])) {

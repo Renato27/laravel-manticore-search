@@ -93,8 +93,19 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         // Handle negation operators by adding to mustNot array
         if (in_array(strtolower($operator), ['!=', '<>'])) {
             $this->mustNot[] = $this->makeFilter($field, '=', $value);
+             $this->whereSequence[] = [
+                'boolean' => 'and',
+                'negated' => true,
+                'condition' => $this->makeFilter($field, '=', $value),
+            ];
         } else {
             $this->must[] = $this->makeFilter($field, $operator, $value);
+            $this->whereSequence[] = [
+                'boolean' => 'and',
+                'negated' => false,
+                'condition' => $this->makeFilter($field, $operator, $value),
+            ];
+
         }
         
         return $this;
@@ -110,6 +121,13 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         }
 
         $this->should[] = $this->makeFilter($field, $operator, $value);
+
+        $this->whereSequence[] = [
+            'boolean' => 'or',
+            'negated' => false,
+            'condition' => $this->makeFilter($field, $operator, $value),
+        ];
+
         return $this;
     }
 
@@ -123,6 +141,11 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         }
 
         $this->mustNot[] = $this->makeFilter($field, $operator, $value);
+        $this->whereSequence[] = [
+            'boolean' => 'and',
+            'negated' => true,
+            'condition' => $this->makeFilter($field, $operator, $value),
+        ];
         return $this;
     }
 
