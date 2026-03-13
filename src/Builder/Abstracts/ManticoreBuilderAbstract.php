@@ -34,6 +34,7 @@ abstract class ManticoreBuilderAbstract
     protected array $eagerQueue = [];
     protected array $scriptFields = [];
     protected array $whereSequence = [];
+    protected array|string|null $indexOverride = null;
 
     public function __construct($model)
     {
@@ -42,11 +43,19 @@ abstract class ManticoreBuilderAbstract
 
     protected function resolveIndexName(): string
     {
+        if ($this->indexOverride !== null) {
+            return is_array($this->indexOverride)
+                ? implode(',', $this->indexOverride)
+                : $this->indexOverride;
+        }
+
         if (method_exists($this->model, 'searchableAs')) {
             $indexes = $this->model->searchableAs();
+
             if (is_array($indexes)) {
                 return implode(',', $indexes);
             }
+
             return $indexes;
         }
 

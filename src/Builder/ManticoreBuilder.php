@@ -2,7 +2,7 @@
 
 namespace ManticoreLaravel\Builder;
 
-use Illuminate\Support\Collection;
+use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use ManticoreLaravel\Builder\Utils\ManticoreQueryCompile;
 
@@ -17,6 +17,12 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 
     public function option(string $key, mixed $value): static {
         $this->option[$key] = $value;
+        return $this;
+    }
+
+    public function useIndex(array|string $indexes): static
+    {
+        $this->indexOverride = $indexes;
         return $this;
     }
 

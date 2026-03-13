@@ -129,7 +129,7 @@ class ManticoreQueryCompile
 
         if (isset($condition['equals'])) {
             foreach ($condition['equals'] as $field => $value) {
-                $val = is_numeric($value) ? $value : "'" . addslashes($value) . "'";
+                $val = self::compileScalarValue($value);
                 $operator = $negated ? '<>' : '=';
                 return "`{$field}` {$operator} {$val}";
             }
@@ -138,7 +138,7 @@ class ManticoreQueryCompile
         if (isset($condition['in'])) {
             foreach ($condition['in'] as $field => $values) {
                 $quoted = array_map(function ($v) {
-                    return is_numeric($v) ? $v : "'" . addslashes($v) . "'";
+                    return self::compileScalarValue($v);
                 }, $values);
                 $operator = $negated ? 'NOT IN' : 'IN';
                 return "`{$field}` {$operator} (" . implode(', ', $quoted) . ")";
@@ -156,7 +156,7 @@ class ManticoreQueryCompile
                         'lt'  => $negated ? '>=' : '<',
                         default => $negated ? '<>' : '='
                     };
-                    $compiledVal = is_numeric($val) ? $val : "'" . addslashes($val) . "'";
+                    $compiledVal = self::compileScalarValue($val);
                     $rangeParts[] = "`{$field}` {$symbol} {$compiledVal}";
                 }
                 if ($negated && count($rangeParts) > 1) {
@@ -167,5 +167,22 @@ class ManticoreQueryCompile
         }
 
         return '1 = 1';
+    }
+
+    protected static function compileScalarValue(mixed $value): string
+    {
+        if ($value === null) {
+            return 'NULL';
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+
+        return "'" . addslashes((string) $value) . "'";
     }
 }
