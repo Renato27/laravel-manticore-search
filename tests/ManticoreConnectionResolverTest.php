@@ -208,15 +208,17 @@ class ManticoreConnectionResolverTest extends TestCase
         app(ManticoreConnectionResolver::class)->resolve('nonexistent');
     }
 
-    public function test_throws_exception_when_connections_block_is_empty_and_name_is_given(): void
+    public function test_falls_back_to_legacy_config_when_connections_block_is_empty_and_name_is_given(): void
     {
         config([
+            'manticore.host' => '10.10.10.10',
+            'manticore.max_matches' => 4321,
             'manticore.connections' => [],
         ]);
 
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('Manticore connection [missing] is not defined.');
+        $config = app(ManticoreConnectionResolver::class)->resolve('missing');
 
-        app(ManticoreConnectionResolver::class)->resolve('missing');
+        $this->assertSame('10.10.10.10', $config['host']);
+        $this->assertSame(4321, $config['max_matches']);
     }
 }

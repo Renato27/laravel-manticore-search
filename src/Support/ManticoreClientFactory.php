@@ -27,4 +27,14 @@ class ManticoreClientFactory
             'persistent' => $config['persistent'],
         ]);
     }
+
+    /**
+     * Build a deterministic cache key for a normalized connection config.
+     *
+     * @param  array{host: string, port: int, username: string|null, password: string|null, transport: string, timeout: int, persistent: bool}  $config
+     */
+    public function cacheKey(array $config): string
+    {
+        return md5(json_encode($config, JSON_THROW_ON_ERROR));
+    }
 }

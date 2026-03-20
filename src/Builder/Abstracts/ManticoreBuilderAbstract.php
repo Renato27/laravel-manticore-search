@@ -4,11 +4,9 @@ namespace ManticoreLaravel\Builder\Abstracts;
 
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Collection;
-use Illuminate\Pagination\LengthAwarePaginator;
 use ManticoreLaravel\Builder\Utils\ManticoreQueryCompile;
 use ManticoreLaravel\Builder\Utils\Utf8SafeSearch;
-use ManticoreLaravel\Support\ManticoreClientFactory;
-use ManticoreLaravel\Support\ManticoreConnectionResolver;
+use ManticoreLaravel\Support\ManticoreManager;
 use Manticoresearch\Client;
 use Manticoresearch\Search;
 use Manticoresearch\Table;
@@ -44,6 +42,31 @@ abstract class ManticoreBuilderAbstract
      */
     private ?Client $client = null;
 
+    /**
+     * Cached resolved connection config for the lifetime of this builder instance.
+     * Avoids repeated container/config repository resolution.
+     */
+    private ?array $resolvedConnectionConfig = null;
+
+    /**
+     * Cached resolved index name for the lifetime of this builder instance.
+     */
+    private ?string $resolvedIndexName = null;
+
+    /**
+     * Cached candidate model attributes used during field mapping.
+     *
+     * @var array<int, string>|null
+     */
+    private ?array $modelAttributeCandidates = null;
+
+    /**
+     * Cached field maps keyed by normalized source-key signature.
+     *
+     * @var array<string, array<string, string>>
+     */
+    private array $fieldMapCache = [];
+
     public function __construct($model)
     {
         $this->model = $model;
@@ -55,13 +78,22 @@ abstract class ManticoreBuilderAbstract
      */
     protected function resolveConnectionConfig(): array
     {
-        return app(ManticoreConnectionResolver::class)->resolve($this->connectionName);
+        if ($this->resolvedConnectionConfig === null) {
+            $this->resolvedConnectionConfig = app(ManticoreManager::class)
+                ->resolveConfig($this->connectionName);
+        }
+
+        return $this->resolvedConnectionConfig;
     }
 
     protected function resolveIndexName(): string
     {
+        if ($this->resolvedIndexName !== null) {
+            return $this->resolvedIndexName;
+        }
+
         if ($this->indexOverride !== null) {
-            return is_array($this->indexOverride)
+            return $this->resolvedIndexName = is_array($this->indexOverride)
                 ? implode(',', $this->indexOverride)
                 : $this->indexOverride;
         }
@@ -70,35 +102,47 @@ abstract class ManticoreBuilderAbstract
             $indexes = $this->model->searchableAs();
 
             if (is_array($indexes)) {
-                return implode(',', $indexes);
+                return $this->resolvedIndexName = implode(',', $indexes);
             }
 
-            return $indexes;
+            return $this->resolvedIndexName = $indexes;
         }
 
-        return $this->model->getTable();
+        return $this->resolvedIndexName = $this->model->getTable();
     }
 
     protected function applyIndex(Search $search): void
     {
-        $search->setTable($this->resolveIndexName());
+        $indexName = $this->resolveIndexName();
+
+        $search->setTable($indexName);
 
         $ref = new \ReflectionClass($search);
         $prop = $ref->getProperty('params');
         $prop->setAccessible(true);
         $params = $prop->getValue($search);
-        $params['index'] = $params['table'] ?? $this->resolveIndexName();
+        $params['index'] = $params['table'] ?? $indexName;
         $prop->setValue($search, $params);
     }
 
     protected function getClient(): Client
     {
         if ($this->client === null) {
-            $config = $this->resolveConnectionConfig();
-            $this->client = app(ManticoreClientFactory::class)->make($config);
+            $this->client = app(ManticoreManager::class)->client($this->connectionName);
         }
 
         return $this->client;
+    }
+
+    protected function flushResolvedConnectionState(): void
+    {
+        $this->client = null;
+        $this->resolvedConnectionConfig = null;
+    }
+
+    protected function flushResolvedIndexState(): void
+    {
+        $this->resolvedIndexName = null;
     }
 
     protected function getTable(): Table
@@ -282,6 +326,12 @@ abstract class ManticoreBuilderAbstract
 
     private function buildFieldMap(array $sourceKeys): array
     {
+        $cacheKey = $this->fieldMapCacheKey($sourceKeys);
+
+        if (isset($this->fieldMapCache[$cacheKey])) {
+            return $this->fieldMapCache[$cacheKey];
+        }
+
         $declaredMap = [];
         $model = $this->model;
         if (property_exists($model, 'manticoreAttributeMap') && is_array($model->manticoreAttributeMap)) {
@@ -300,7 +350,7 @@ abstract class ManticoreBuilderAbstract
             $sourceKeyIndex[strtolower($k)] = $k;
         }
 
-        $candidates = array_unique(array_merge([$model->getKeyName()], $model->getFillable()));
+        $candidates = $this->modelAttributeCandidates();
     
         $variants = function (string $name): array {
             $o = $name;
@@ -335,8 +385,31 @@ abstract class ManticoreBuilderAbstract
             $pk = $model->getKeyName();
             $map[$sourceKeyIndex['id']] = $pk;
         }
-        
-        return $map;
+
+        return $this->fieldMapCache[$cacheKey] = $map;
+    }
+
+    private function fieldMapCacheKey(array $sourceKeys): string
+    {
+        $normalized = array_map('strtolower', $sourceKeys);
+        sort($normalized);
+
+        return implode('|', $normalized);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function modelAttributeCandidates(): array
+    {
+        if ($this->modelAttributeCandidates !== null) {
+            return $this->modelAttributeCandidates;
+        }
+
+        return $this->modelAttributeCandidates = array_values(array_unique(array_merge(
+            [$this->model->getKeyName()],
+            $this->model->getFillable()
+        )));
     }
 
     private function normalizeForModel(array $source): array
