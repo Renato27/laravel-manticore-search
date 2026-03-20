@@ -4,7 +4,6 @@ namespace ManticoreLaravel\Builder;
 
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
-use ManticoreLaravel\Builder\Utils\ManticoreQueryCompile;
 
 class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 {
@@ -23,6 +22,8 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
     public function useIndex(array|string $indexes): static
     {
         $this->indexOverride = $indexes;
+        $this->flushResolvedIndexState();
+
         return $this;
     }
 
@@ -94,6 +95,8 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
     public function usingConnection(string $name): static
     {
         $this->connectionName = $name;
+        $this->flushResolvedConnectionState();
+
         return $this;
     }
 
@@ -348,7 +351,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         if (empty($consolidatedRows)) {
             return null;
         }
-
+    
         $models = $this->hydrateModelsFromRows([$consolidatedRows[0]]);
         return $this->applyEloquentWith($models)->first();
     }
