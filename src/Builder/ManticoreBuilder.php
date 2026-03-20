@@ -8,7 +8,7 @@ use ManticoreLaravel\Builder\Utils\ManticoreQueryCompile;
 
 class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 {
-    public function rawQuery(string $raw, $rawMode = false): static
+    public function rawQuery(string $raw, bool $rawMode = false): static
     {
         $this->rawQuery = $raw;
         $this->rawQueryMode = $rawMode;
@@ -83,7 +83,17 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 
     public function maxMatches(int $value): static
     {
-        $this->option['max_matches'] = $value ?? config('manticore.max_matches');
+        $this->option['max_matches'] = $value;
+        return $this;
+    }
+
+    /**
+     * Select a named Manticore connection for this query.
+     * The name must correspond to a key in manticore.connections.
+     */
+    public function usingConnection(string $name): static
+    {
+        $this->connectionName = $name;
         return $this;
     }
 
@@ -242,11 +252,11 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         return $this;
     }
 
-    public function expression($name, $exp): self
+    public function expression(string $name, mixed $exp): static
     {
-		$this->scriptFields[$name] = $exp;
-		return $this;
-	}
+        $this->scriptFields[$name] = $exp;
+        return $this;
+    }
 
     public function limit(int $limit): static
     {
