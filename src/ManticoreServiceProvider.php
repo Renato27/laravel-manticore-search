@@ -3,6 +3,8 @@
 namespace ManticoreLaravel;
 
 use Illuminate\Support\ServiceProvider;
+use ManticoreLaravel\Support\ManticoreClientFactory;
+use ManticoreLaravel\Support\ManticoreConnectionResolver;
 
 class ManticoreServiceProvider extends ServiceProvider
 {
@@ -16,5 +18,13 @@ class ManticoreServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/Config/manticore.php', 'manticore');
+
+        $this->app->singleton(ManticoreConnectionResolver::class, function ($app) {
+            return new ManticoreConnectionResolver($app['config']);
+        });
+
+        $this->app->singleton(ManticoreClientFactory::class, function () {
+            return new ManticoreClientFactory();
+        });
     }
 }

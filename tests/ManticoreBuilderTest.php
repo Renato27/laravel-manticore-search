@@ -17,7 +17,7 @@ class TestModel extends Model
 
     public function searchableAs()
     {
-        return ['ttrentitytest'];
+        return ['test'];
     }
 }
 
@@ -30,14 +30,28 @@ class ManticoreBuilderTest extends TestCase
 
     protected function getEnvironmentSetUp($app)
     {
+        // Legacy flat config — kept for backward compatibility.
         $app['config']->set('manticore.host', '127.0.0.1');
         $app['config']->set('manticore.port', 9312);
-        $app['config']->set('manticore.username', 'root'); 
+        $app['config']->set('manticore.username', 'root');
         $app['config']->set('manticore.password', null);
         $app['config']->set('manticore.transport', 'http');
         $app['config']->set('manticore.timeout', 5);
         $app['config']->set('manticore.persistent', false);
         $app['config']->set('manticore.max_matches', 10000);
+
+        // New multi-connection config — resolver prefers this when present.
+        $app['config']->set('manticore.default', 'default');
+        $app['config']->set('manticore.connections.default', [
+            'host'        => '127.0.0.1',
+            'port'        => 9312,
+            'username'    => 'root',
+            'password'    => null,
+            'transport'   => 'http',
+            'timeout'     => 5,
+            'persistent'  => false,
+            'max_matches' => 10000,
+        ]);
     }
 
     protected function defineEnvironment($app)
@@ -45,11 +59,11 @@ class ManticoreBuilderTest extends TestCase
        $this->getEnvironmentSetUp($app);
     }
 
-    public function it_applies_max_matches_from_parameter()
+    public function test_it_applies_max_matches_from_parameter(): void
     {
         $builder = (new ManticoreBuilder(new TestModel()))
             ->match('Portugal')
-            ->maxMatches(20000) 
+            ->maxMatches(20000)
             ->limit(10);
 
         $ref = new \ReflectionClass($builder);
@@ -64,10 +78,12 @@ class ManticoreBuilderTest extends TestCase
         );
     }
 
-    public function it_applies_max_matches_from_config_when_not_overridden()
+    public function test_it_applies_max_matches_from_config_when_not_overridden(): void
     {
-
-        config(['manticore.max_matches' => 8000]);
+        config([
+            'manticore.max_matches'                    => 8000,
+            'manticore.connections.default.max_matches' => 8000,
+        ]);
 
         $builder = (new ManticoreBuilder(new TestModel()))
             ->match('Portugal')
@@ -182,7 +198,6 @@ class ManticoreBuilderTest extends TestCase
             'Third option should be included'
         );
         
-        // Verify options are comma-separated
         $this->assertMatchesRegularExpression(
             '/OPTION.*ranker=bm25.*,.*max_query_time=1000.*,.*retry_count=3/',
             $sql,
@@ -192,7 +207,6 @@ class ManticoreBuilderTest extends TestCase
 
     public function test_where_not_equals_operators()
     {
-        // Test != operator
         $builder = (new ManticoreBuilder(new TestModel()))
             ->where('countryiso', '!=', 'PT')
             ->limit(10);
@@ -208,7 +222,6 @@ class ManticoreBuilderTest extends TestCase
             '!= operator should generate <> in SQL'
         );
 
-        // Test <> operator
         $builder2 = (new ManticoreBuilder(new TestModel()))
             ->where('countryiso', '<>', 'ES')
             ->limit(10);
@@ -242,7 +255,6 @@ class ManticoreBuilderTest extends TestCase
 
     public function test_where_not_with_operators()
     {
-        // Test whereNot with > operator (should become <=)
         $builder = (new ManticoreBuilder(new TestModel()))
             ->whereNot('entityid', '>', 1000)
             ->limit(10);
@@ -499,7 +511,7 @@ class ManticoreBuilderTest extends TestCase
         }
     }
 
-    public function it_returns_a_search_instance()
+    public function test_it_returns_a_search_instance(): void
     {
         $builder = new ManticoreBuilder(new TestModel());
 
@@ -508,14 +520,14 @@ class ManticoreBuilderTest extends TestCase
         $this->assertInstanceOf(\Manticoresearch\Search::class, $search);
     }
 
-    public function builder_method_returns_the_same_instance()
+    public function test_builder_method_returns_the_same_instance(): void
     {
         $builder = new ManticoreBuilder(new TestModel());
 
         $this->assertSame($builder, $builder->builder());
     }
 
-    public function it_returns_a_table_instance()
+    public function test_it_returns_a_table_instance(): void
     {
         $builder = new ManticoreBuilder(new TestModel());
 
@@ -524,7 +536,7 @@ class ManticoreBuilderTest extends TestCase
         $this->assertInstanceOf(\Manticoresearch\Table::class, $table);
     }
 
-    public function it_returns_a_client_instance()
+    public function test_it_returns_a_client_instance(): void
     {
         $builder = new ManticoreBuilder(new TestModel());
 
@@ -533,5 +545,92 @@ class ManticoreBuilderTest extends TestCase
         $this->assertInstanceOf(\Manticoresearch\Client::class, $client);
     }
 
+    public function test_max_matches_appears_exactly_once_when_set_via_max_matches_method(): void
+    {
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->match('test')
+            ->maxMatches(20000)
+            ->limit(5);
 
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+
+        $this->assertStringContainsString('max_matches=20000', $sql);
+        $this->assertSame(
+            1,
+            substr_count($sql, 'max_matches='),
+            'max_matches must appear exactly once in the OPTION clause'
+        );
+    }
+
+    public function test_max_matches_appears_exactly_once_when_set_via_option_method(): void
+    {
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->match('test')
+            ->option('max_matches', 5000)
+            ->limit(5);
+
+        $ref = new \ReflectionClass($builder);
+        $method = $ref->getMethod('buildSqlQuery');
+        $method->setAccessible(true);
+        $sql = $method->invoke($builder);
+
+        $this->assertStringContainsString('max_matches=5000', $sql);
+        $this->assertSame(
+            1,
+            substr_count($sql, 'max_matches='),
+            'max_matches must appear exactly once in the OPTION clause'
+        );
+    }
+
+    public function test_using_connection_sets_connection_name_property(): void
+    {
+        $builder = (new ManticoreBuilder(new TestModel()))
+            ->usingConnection('replica');
+
+        $ref  = new \ReflectionClass($builder);
+        $prop = $ref->getProperty('connectionName');
+        $prop->setAccessible(true);
+
+        $this->assertSame('replica', $prop->getValue($builder));
+    }
+
+    public function test_using_connection_is_chainable(): void
+    {
+        $builder = new ManticoreBuilder(new TestModel());
+
+        $this->assertSame($builder, $builder->usingConnection('default'));
+    }
+
+    public function test_expression_stores_script_field_and_is_chainable(): void
+    {
+        $builder = new ManticoreBuilder(new TestModel());
+        $result  = $builder->expression('computed_rank', '(score * 2)');
+
+        $this->assertSame($builder, $result);
+
+        $ref  = new \ReflectionClass($builder);
+        $prop = $ref->getProperty('scriptFields');
+        $prop->setAccessible(true);
+        $fields = $prop->getValue($builder);
+
+        $this->assertArrayHasKey('computed_rank', $fields);
+        $this->assertSame('(score * 2)', $fields['computed_rank']);
+    }
+
+    public function test_client_is_cached_for_builder_lifetime(): void
+    {
+        $builder = new ManticoreBuilder(new TestModel());
+
+        $ref    = new \ReflectionClass($builder);
+        $method = $ref->getMethod('getClient');
+        $method->setAccessible(true);
+
+        $first  = $method->invoke($builder);
+        $second = $method->invoke($builder);
+
+        $this->assertSame($first, $second, 'getClient() must return the same cached instance');
+    }
 }

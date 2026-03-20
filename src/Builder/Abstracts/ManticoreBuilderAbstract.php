@@ -6,8 +6,9 @@ use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Pagination\LengthAwarePaginator;
 use ManticoreLaravel\Builder\Utils\ManticoreQueryCompile;
-use ManticoreLaravel\Builder\Utils\Utf8SafeClient;
 use ManticoreLaravel\Builder\Utils\Utf8SafeSearch;
+use ManticoreLaravel\Support\ManticoreClientFactory;
+use ManticoreLaravel\Support\ManticoreConnectionResolver;
 use Manticoresearch\Client;
 use Manticoresearch\Search;
 use Manticoresearch\Table;
@@ -35,10 +36,26 @@ abstract class ManticoreBuilderAbstract
     protected array $scriptFields = [];
     protected array $whereSequence = [];
     protected array|string|null $indexOverride = null;
+    protected ?string $connectionName = null;
+
+    /**
+     * Lazily resolved and cached client for the lifetime of this builder instance.
+     * Avoids opening multiple connections during a single query chain.
+     */
+    private ?Client $client = null;
 
     public function __construct($model)
     {
         $this->model = $model;
+    }
+
+    /**
+     * Resolve the active connection configuration through the centralized resolver.
+     * Supports legacy flat config, default named connection, and explicit named connections.
+     */
+    protected function resolveConnectionConfig(): array
+    {
+        return app(ManticoreConnectionResolver::class)->resolve($this->connectionName);
     }
 
     protected function resolveIndexName(): string
@@ -62,7 +79,7 @@ abstract class ManticoreBuilderAbstract
         return $this->model->getTable();
     }
 
-    protected function applyIndex(Search $search)
+    protected function applyIndex(Search $search): void
     {
         $search->setTable($this->resolveIndexName());
 
@@ -76,15 +93,12 @@ abstract class ManticoreBuilderAbstract
 
     protected function getClient(): Client
     {
-        return new Utf8SafeClient([
-            'host' => config('manticore.host'),
-            'port' => config('manticore.port'),
-            'username' => config('manticore.username'),
-            'password' => config('manticore.password'),
-            'transport' => config('manticore.transport'),
-            'timeout' => config('manticore.timeout'),
-            'persistent' => config('manticore.persistent'),
-        ]);
+        if ($this->client === null) {
+            $config = $this->resolveConnectionConfig();
+            $this->client = app(ManticoreClientFactory::class)->make($config);
+        }
+
+        return $this->client;
     }
 
     protected function getTable(): Table
@@ -113,7 +127,7 @@ abstract class ManticoreBuilderAbstract
         return $this->hydrateModelsFromRows($rows);
     }
 
-    protected function extractRawRows($results): array
+    protected function extractRawRows(mixed $results): array
     {
         if (is_array($results)) {
             return $this->extractRawRowsFromArrayResult($results);
@@ -122,7 +136,7 @@ abstract class ManticoreBuilderAbstract
         return $this->extractRawRowsFromDefaultResult($results);
     }
 
-    protected function extractRawRowsFromDefaultResult($results): array
+    protected function extractRawRowsFromDefaultResult(mixed $results): array
     {
         $hits = iterator_to_array($results);
 
@@ -174,7 +188,7 @@ abstract class ManticoreBuilderAbstract
         return new Collection($models);
     }
 
-    protected function hydrateModelFromRow(array $row)
+    protected function hydrateModelFromRow(array $row): mixed
     {
         $model = clone $this->model;
         $highlight = $row['_highlight'] ?? null;
@@ -362,7 +376,7 @@ abstract class ManticoreBuilderAbstract
         return $out;
     }
 
-    private function getID($hit)
+    private function getID(mixed $hit): mixed
     {
         if (is_array($hit) && array_key_exists('_id', $hit)) {
             return $hit['_id'];
@@ -370,7 +384,7 @@ abstract class ManticoreBuilderAbstract
             return $hit->getId();
         } elseif (!is_array($hit) && property_exists($hit, 'id')) {
             return $hit->id;
-        } elseif (array_key_exists('id', $hit)) {
+        } elseif (is_array($hit) && array_key_exists('id', $hit)) {
             return $hit['id'];
         }
         return null;
@@ -523,20 +537,20 @@ abstract class ManticoreBuilderAbstract
         return !empty($this->having) ? 'HAVING ' . implode(' AND ', $this->having) : '';
     }
 
-  private function buildOptionClause(): string
+    private function buildOptionClause(): string
     {
-        $defaultMaxMatches = config('manticore.max_matches', 1000);
-        $maxMatches = $this->maxMatches ?? $defaultMaxMatches;
-        $clauses = [];
-        $clauses[] = "max_matches={$maxMatches}";
+        $maxMatches = $this->option['max_matches']
+            ?? $this->resolveConnectionConfig()['max_matches'];
+
+        $clauses = ["max_matches={$maxMatches}"];
 
         foreach ($this->option as $key => $value) {
-            if ($value !== null) {
-                if (is_bool($value)) {
-                    $value = $value ? '1' : '0';
-                }
+            if ($key === 'max_matches') {
+                continue;
+            }
 
-                $clauses[] = "{$key}={$value}";
+            if ($value !== null) {
+                $clauses[] = "{$key}=" . (is_bool($value) ? ($value ? '1' : '0') : $value);
             }
         }
 
