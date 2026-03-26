@@ -392,18 +392,28 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             ));
         }
 
-        $resultSet = $builder->executeSqlQuery($builder->buildSqlQuery(), true);
+        $sql = $builder->buildSqlQuery();
+        \Illuminate\Support\Facades\Log::debug('paginateConsolidatedSqlGrouped SQL', ['sql' => $sql]);
+
+        $resultSet = $builder->executeSqlQuery($sql, true);
         $rows = $builder->extractRawRows($resultSet);
         $total = $builder->extractTotalFromResultSet($resultSet, count($rows));
 
-        \Illuminate\Support\Facades\Log::debug('paginateConsolidatedSqlGrouped', [
+        \Illuminate\Support\Facades\Log::debug('paginateConsolidatedSqlGrouped raw data', [
             'groupField' => $groupField,
             'perPage' => $perPage,
             'page' => $page,
             'offset' => $offset,
             'resultSet.total' => $total,
             'extractedRows.count' => count($rows),
-            'rows' => array_slice($rows, 0, 3), // First 3 rows
+            'first_5_rows_field_values' => array_map(fn($r) => [
+                'allKeys' => array_keys($r),
+                'groupFieldValue' => $r[$groupField] ?? 'NOT_FOUND',
+                'groupFieldAlternatives' => collect($r)->filter(function($v, $k) use ($groupField) {
+                    if (!is_string($k)) return false;
+                    return strtolower(preg_replace('/[^a-z0-9]/', '', $k)) === strtolower(preg_replace('/[^a-z0-9]/', '', $groupField));
+                })->toArray(),
+            ], array_slice($rows, 0, 5)),
         ]);
 
         if (empty($rows)) {
@@ -417,10 +427,9 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             $preserveGroupFieldInHistory
         );
 
-        \Illuminate\Support\Facades\Log::debug('After consolidateRawRows', [
+        \Illuminate\Support\Facades\Log::debug('After consolidateRawRows in SqlGrouped', [
             'before_count' => count($rows),
             'after_count' => count($consolidated),
-            'consolidated' => array_slice($consolidated, 0, 2), // First 2 consolidated items
         ]);
 
         return [
