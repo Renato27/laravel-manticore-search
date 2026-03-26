@@ -302,9 +302,20 @@ abstract class ManticoreBuilderAbstract
         }
 
         $grouped = [];
-        foreach ($rows as $row) {
+        $groupingDebug = [];
+
+        foreach ($rows as $idx => $row) {
             $groupValue = $this->resolveRowFieldValue($row, $groupField);
             $grouped[(string) $groupValue][] = $row;
+            
+            if ($idx < 5) { // Log first 5 rows
+                $groupingDebug[] = [
+                    'row_index' => $idx,
+                    'groupValue' => $groupValue,
+                    'groupValue_type' => gettype($groupValue),
+                    'row_keys' => array_keys($row),
+                ];
+            }
         }
 
         \Illuminate\Support\Facades\Log::debug('consolidateRawRows grouping', [
@@ -312,6 +323,7 @@ abstract class ManticoreBuilderAbstract
             'groupField' => $groupField,
             'unique_group_values' => count($grouped),
             'sample_groupValues' => array_slice(array_keys($grouped), 0, 5),
+            'first_5_rows_grouping' => $groupingDebug,
         ]);
 
         $consolidated = [];
@@ -385,26 +397,45 @@ abstract class ManticoreBuilderAbstract
     protected function resolveRowFieldValue(array $row, string $field): mixed
     {
         if (array_key_exists($field, $row)) {
+            \Illuminate\Support\Facades\Log::debug('resolveRowFieldValue direct match', [
+                'field' => $field,
+                'value' => $row[$field],
+            ]);
             return $row[$field];
         }
 
         $target = $this->normalizeFieldKey($field);
+        $normalized_row = [];
 
         foreach ($row as $key => $value) {
             if (!is_string($key)) {
                 continue;
             }
 
-            if ($this->normalizeFieldKey($key) === $target) {
+            $normalizedKey = $this->normalizeFieldKey($key);
+            $normalized_row[$normalizedKey] = [
+                'original_key' => $key,
+                'value' => $value,
+                'normalized_key' => $normalizedKey,
+            ];
+
+            if ($normalizedKey === $target) {
+                \Illuminate\Support\Facades\Log::debug('resolveRowFieldValue case-insensitive match', [
+                    'field' => $field,
+                    'normalized_field' => $target,
+                    'found_key' => $key,
+                    'value' => $value,
+                ]);
                 return $value;
             }
         }
 
         // Log when field is not found
-        \Illuminate\Support\Facades\Log::warning('Field not found in row', [
+        \Illuminate\Support\Facades\Log::warning('resolveRowFieldValue NOT found', [
             'field' => $field,
             'normalized_field' => $target,
             'row_keys' => array_keys($row),
+            'normalized_keys' => array_keys($normalized_row),
         ]);
 
         return null;
