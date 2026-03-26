@@ -317,11 +317,6 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         string $historyAttribute,
         bool $preserveGroupFieldInHistory
     ): array {
-        \Illuminate\Support\Facades\Log::debug('paginateConsolidatedFallback called', [
-            'groupField' => $groupField,
-            'canUseSqlGroupedConsolidatedPagination' => $this->canUseSqlGroupedConsolidatedPagination($groupField),
-        ]);
-
         if ($this->canUseSqlGroupedConsolidatedPagination($groupField)) {
             return $this->paginateConsolidatedSqlGrouped(
                 $groupField,
@@ -334,11 +329,6 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 
         $source = $this->getRawRowsForConsolidatedFallback($groupField);
         $rows = $source['rows'];
-
-        \Illuminate\Support\Facades\Log::debug('paginateConsolidatedFallback non-sql path', [
-            'retrievedRows.count' => count($rows),
-            'source.total' => $source['total'] ?? null,
-        ]);
 
         if (empty($rows)) {
             return ['rows' => [], 'total' => 0];
@@ -353,15 +343,6 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 
         $total = $source['total'] ?? count($consolidatedRows);
         $offset = max(0, ($page - 1) * $perPage);
-
-        \Illuminate\Support\Facades\Log::debug('paginateConsolidatedFallback consolidation result', [
-            'rawRows.count' => count($rows),
-            'consolidatedRows.count' => count($consolidatedRows),
-            'slicing.offset' => $offset,
-            'slicing.perPage' => $perPage,
-            'sliced.count' => count(array_slice($consolidatedRows, $offset, $perPage)),
-            'total' => $total,
-        ]);
 
         return [
             'rows' => array_slice($consolidatedRows, $offset, $perPage),
@@ -392,48 +373,21 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             ));
         }
 
-        $sql = $builder->buildSqlQuery();
-        \Illuminate\Support\Facades\Log::debug('paginateConsolidatedSqlGrouped SQL', ['sql' => $sql]);
-
-        $resultSet = $builder->executeSqlQuery($sql, true);
+        $resultSet = $builder->executeSqlQuery($builder->buildSqlQuery(), true);
         $rows = $builder->extractRawRows($resultSet);
         $total = $builder->extractTotalFromResultSet($resultSet, count($rows));
-
-        \Illuminate\Support\Facades\Log::debug('paginateConsolidatedSqlGrouped raw data', [
-            'groupField' => $groupField,
-            'perPage' => $perPage,
-            'page' => $page,
-            'offset' => $offset,
-            'resultSet.total' => $total,
-            'extractedRows.count' => count($rows),
-            'first_5_rows_field_values' => array_map(fn($r) => [
-                'allKeys' => array_keys($r),
-                'groupFieldValue' => $r[$groupField] ?? 'NOT_FOUND',
-                'groupFieldAlternatives' => collect($r)->filter(function($v, $k) use ($groupField) {
-                    if (!is_string($k)) return false;
-                    return strtolower(preg_replace('/[^a-z0-9]/', '', $k)) === strtolower(preg_replace('/[^a-z0-9]/', '', $groupField));
-                })->toArray(),
-            ], array_slice($rows, 0, 5)),
-        ]);
 
         if (empty($rows)) {
             return ['rows' => [], 'total' => $total];
         }
 
-        $consolidated = $builder->consolidateRawRows(
-            $rows,
-            $groupField,
-            $historyAttribute,
-            $preserveGroupFieldInHistory
-        );
-
-        \Illuminate\Support\Facades\Log::debug('After consolidateRawRows in SqlGrouped', [
-            'before_count' => count($rows),
-            'after_count' => count($consolidated),
-        ]);
-
         return [
-            'rows' => $consolidated,
+            'rows' => $builder->consolidateRawRows(
+                $rows,
+                $groupField,
+                $historyAttribute,
+                $preserveGroupFieldInHistory
+            ),
             'total' => $total,
         ];
     }
