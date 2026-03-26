@@ -153,10 +153,16 @@ abstract class ManticoreBuilderAbstract
         return $table;
     }
 
-     protected function fetchRawQuery(): Collection
+    protected function executeSqlQuery(string $sql, ?bool $rawMode = null): mixed
     {
         $client = $this->getClient();
-        $results = $client->sql($this->rawQuery, $this->rawQueryMode);
+
+        return $client->sql($sql, $rawMode ?? $this->rawQueryMode);
+    }
+
+     protected function fetchRawQuery(): Collection
+    {
+        $results = $this->executeSqlQuery($this->rawQuery, $this->rawQueryMode);
 
         $rows = $this->extractRawRows($results);
         $models = $this->hydrateModelsFromRows($rows);
@@ -185,8 +191,8 @@ abstract class ManticoreBuilderAbstract
         $hits = iterator_to_array($results);
 
         return array_map(function ($hit) {
-            $id = $this->getID($hit);
             $raw = $hit->getData() ?? [];
+            $id = $this->getID($hit, is_array($raw) ? $raw : []);
 
             if (filled($id)) {
                 $raw = ['id' => $id] + $raw;
@@ -208,19 +214,49 @@ abstract class ManticoreBuilderAbstract
 
     protected function extractRawRowsFromArrayResult(array $results): array
     {
-        $hits = $results['hits']['hits'] ?? [];
-        $hits = iterator_to_array($hits);
+        if (isset($results['hits']['hits'])) {
+            $hits = iterator_to_array($results['hits']['hits']);
 
-        return array_map(function ($hit) {
-            $id = $this->getID($hit);
-            $raw = $hit['_source'] ?? [];
+            return array_map(function ($hit) {
+                $id = $this->getID($hit);
+                $raw = $hit['_source'] ?? [];
 
-            if (filled($id)) {
-                $raw = ['id' => $id] + $raw;
+                if (filled($id)) {
+                    $raw = ['id' => $id] + $raw;
+                }
+
+                return $this->normalizeForModel($raw);
+            }, $hits);
+        }
+
+        if (!array_is_list($results)) {
+            return [];
+        }
+
+        return array_map(function ($row) {
+            if (is_array($row) && isset($row['_source']) && is_array($row['_source'])) {
+                $id = $this->getID($row);
+                $raw = $row['_source'];
+
+                if (filled($id)) {
+                    $raw = ['id' => $id] + $raw;
+                }
+
+                return $this->normalizeForModel($raw);
             }
 
-            return $this->normalizeForModel($raw);
-        }, $hits);
+            if (is_array($row)) {
+                $id = $this->getID($row, $row);
+
+                if (filled($id) && !array_key_exists('id', $row)) {
+                    $row = ['id' => $id] + $row;
+                }
+
+                return $this->normalizeForModel($row);
+            }
+
+            return $this->normalizeForModel(['value' => $row]);
+        }, $results);
     }
 
     protected function hydrateModelsFromRows(array $rows): Collection
@@ -267,9 +303,16 @@ abstract class ManticoreBuilderAbstract
 
         $grouped = [];
         foreach ($rows as $row) {
-            $groupValue = $row[$groupField] ?? null;
+            $groupValue = $this->resolveRowFieldValue($row, $groupField);
             $grouped[(string) $groupValue][] = $row;
         }
+
+        \Illuminate\Support\Facades\Log::debug('consolidateRawRows grouping', [
+            'input_rows_count' => count($rows),
+            'groupField' => $groupField,
+            'unique_group_values' => count($grouped),
+            'sample_groupValues' => array_slice(array_keys($grouped), 0, 5),
+        ]);
 
         $consolidated = [];
 
@@ -305,7 +348,7 @@ abstract class ManticoreBuilderAbstract
                 $snapshot = [];
 
                 foreach ($variableKeys as $key) {
-                    if (!$preserveGroupFieldInHistory && $key === $groupField) {
+                    if (!$preserveGroupFieldInHistory && $this->isSameFieldKey($key, $groupField)) {
                         continue;
                     }
 
@@ -321,7 +364,50 @@ abstract class ManticoreBuilderAbstract
             $consolidated[] = $common;
         }
 
+        \Illuminate\Support\Facades\Log::debug('consolidateRawRows result', [
+            'input_rows_count' => count($rows),
+            'output_consolidated_count' => count($consolidated),
+        ]);
+
         return $consolidated;
+    }
+
+    protected function normalizeFieldKey(string $key): string
+    {
+        return preg_replace('/[^a-z0-9]/', '', strtolower($key));
+    }
+
+    protected function isSameFieldKey(string $left, string $right): bool
+    {
+        return $this->normalizeFieldKey($left) === $this->normalizeFieldKey($right);
+    }
+
+    protected function resolveRowFieldValue(array $row, string $field): mixed
+    {
+        if (array_key_exists($field, $row)) {
+            return $row[$field];
+        }
+
+        $target = $this->normalizeFieldKey($field);
+
+        foreach ($row as $key => $value) {
+            if (!is_string($key)) {
+                continue;
+            }
+
+            if ($this->normalizeFieldKey($key) === $target) {
+                return $value;
+            }
+        }
+
+        // Log when field is not found
+        \Illuminate\Support\Facades\Log::warning('Field not found in row', [
+            'field' => $field,
+            'normalized_field' => $target,
+            'row_keys' => array_keys($row),
+        ]);
+
+        return null;
     }
 
     private function buildFieldMap(array $sourceKeys): array
@@ -449,17 +535,53 @@ abstract class ManticoreBuilderAbstract
         return $out;
     }
 
-    private function getID(mixed $hit): mixed
+    private function getID(mixed $hit, array $raw = []): mixed
     {
+        if (array_key_exists('_id', $raw)) {
+            return $raw['_id'];
+        }
+
+        if (array_key_exists('id', $raw)) {
+            return $raw['id'];
+        }
+
         if (is_array($hit) && array_key_exists('_id', $hit)) {
             return $hit['_id'];
-        } elseif (!is_array($hit) && method_exists($hit, 'getId')) {
-            return $hit->getId();
-        } elseif (!is_array($hit) && property_exists($hit, 'id')) {
-            return $hit->id;
-        } elseif (is_array($hit) && array_key_exists('id', $hit)) {
+        }
+
+        if (is_array($hit) && array_key_exists('id', $hit)) {
             return $hit['id'];
         }
+
+        if (!is_array($hit) && method_exists($hit, 'getData')) {
+            try {
+                $data = $hit->getData();
+
+                if (is_array($data)) {
+                    if (array_key_exists('_id', $data)) {
+                        return $data['_id'];
+                    }
+
+                    if (array_key_exists('id', $data)) {
+                        return $data['id'];
+                    }
+                }
+            } catch (\Throwable $e) {
+            }
+        }
+
+        if (!is_array($hit) && property_exists($hit, 'id')) {
+            return $hit->id;
+        }
+
+        if (!is_array($hit) && method_exists($hit, 'getId')) {
+            try {
+                return $hit->getId();
+            } catch (\Throwable $e) {
+                return null;
+            }
+        }
+
         return null;
     }
 
@@ -618,16 +740,39 @@ abstract class ManticoreBuilderAbstract
         $clauses = ["max_matches={$maxMatches}"];
 
         foreach ($this->option as $key => $value) {
-            if ($key === 'max_matches') {
+            if ($key === 'max_matches' || $value === null) {
                 continue;
             }
 
-            if ($value !== null) {
-                $clauses[] = "{$key}=" . (is_bool($value) ? ($value ? '1' : '0') : $value);
-            }
+            $clauses[] = "{$key}=" . $this->formatOptionValue($value);
         }
 
         return 'OPTION ' . implode(',', $clauses);
+    }
+
+    private function formatOptionValue(mixed $value): string
+    {
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if (is_array($value)) {
+            $isAssoc = array_keys($value) !== range(0, count($value) - 1);
+
+            if ($isAssoc) {
+                $pairs = [];
+
+                foreach ($value as $k => $v) {
+                    $pairs[] = "{$k}={$v}";
+                }
+
+                return '(' . implode(',', $pairs) . ')';
+            }
+
+            return '(' . implode(',', $value) . ')';
+        }
+
+        return (string) $value;
     }
 
     protected function buildLimitClause(): string
@@ -636,7 +781,7 @@ abstract class ManticoreBuilderAbstract
         $offset = isset($this->offset) ? $this->offset : null;
 
         if ($limit !== null && $offset !== null) {
-            return "LIMIT {$limit}, {$offset}";
+            return "LIMIT {$offset}, {$limit}";
         }
 
         if ($limit !== null) {

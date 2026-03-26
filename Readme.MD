@@ -98,6 +98,21 @@ Company::manticore()
     ->paginate(15);
 ```
 
+Pagination links automatically preserve the current request filters (except the page key),
+including both GET query string filters and POST/JSON payload filters. This ensures page 2+
+always continues the same filtered search context.
+
+When filter payloads are too large for URL query strings, pagination links automatically switch
+to a short context token (`_mctx`) and store the full filter payload in cache.
+
+You can recover the full filter payload in follow-up requests with:
+
+```php
+use ManticoreLaravel\Builder\ManticoreBuilder;
+
+$input = ManticoreBuilder::resolvePaginationInputFromRequest();
+```
+
 ### Aggregations (Facets)
 ```php
 Company::manticore()
