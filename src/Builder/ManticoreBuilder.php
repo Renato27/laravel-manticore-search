@@ -3,10 +3,688 @@
 namespace ManticoreLaravel\Builder;
 
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Str;
 
 class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 {
+    protected function activeConnectionConfigKey(): string
+    {
+        return $this->connectionName
+            ?? (string) config('manticore.default', 'default');
+    }
+
+    protected function configuredMaxMatches(): int
+    {
+        $value = (int) ($this->resolveConnectionConfig()['max_matches'] ?? 1000);
+
+        return $value > 0 ? $value : 1000;
+    }
+
+    protected function maxMatchesForOffsetWindow(int $offset, int $perPage): int
+    {
+        return max($this->configuredMaxMatches(), $offset + $perPage);
+    }
+
+    /**
+     * Compute a hash of the current filter context to identify identical queries.
+     * Used for pagination total caching.
+     */
+    protected function computeFiltersContextHash(): string
+    {
+        $signatureBuilder = clone $this;
+        $signatureBuilder->limit = null;
+        $signatureBuilder->offset = null;
+        $signatureBuilder->sort = [];
+
+        if ($signatureBuilder->usesSqlQueryMode()) {
+            $signatureBuilder->option('accurate_aggregation', $signatureBuilder->option['accurate_aggregation'] ?? 1);
+        }
+
+        $signatureOptions = $signatureBuilder->option;
+        unset($signatureOptions['max_matches']);
+
+        $signature = [
+            'connectionName' => $signatureBuilder->connectionName,
+            'index' => $signatureBuilder->resolveIndexName(),
+            'rawQueryMode' => $signatureBuilder->rawQueryMode,
+            'rawQuery' => $signatureBuilder->rawQuery,
+            'sql' => $signatureBuilder->rawQuery ? null : $signatureBuilder->buildSqlQuery(),
+            'option' => $signatureOptions,
+        ];
+
+        return md5(serialize($signature));
+    }
+
+    /**
+     * Get the cache key for pagination total based on filters context.
+     */
+    protected function getPaginationCacheKey(string $suffix = ''): string
+    {
+        $prefix = (string) config('manticore.pagination.cache_prefix', 'manticore:pagination:');
+        $hash = $this->computeFiltersContextHash();
+        
+        return $prefix . 'total:' . $hash . ($suffix ? ':' . $suffix : '');
+    }
+
+    /**
+     * Get the TTL for pagination total cache.
+     */
+    protected function getPaginationTotalCacheTtl(): int
+    {
+        return (int) config('manticore.pagination.total_cache_ttl', 300); // 5 minutes default
+    }
+
+    protected function usesSqlQueryMode(): bool
+    {
+        return !empty($this->groupBy) || !empty($this->having) || !empty($this->select);
+    }
+
+    protected function ensureAccurateAggregationOption(): void
+    {
+        if (!empty($this->groupBy) && !array_key_exists('accurate_aggregation', $this->option)) {
+            $this->option('accurate_aggregation', 1);
+        }
+    }
+
+    /**
+     * Get the total number of matches for the current query filters.
+     * This executes a separate query to get the ACTUAL total, not limited by pagination.
+     *
+     * @return int
+     */
+    protected function getTotalMatches(): int
+    {
+        // Check cache first
+        $cacheKey = $this->getPaginationCacheKey();
+        $cachedTotal = Cache::get($cacheKey);
+        
+        if (is_numeric($cachedTotal)) {
+            return (int) $cachedTotal;
+        }
+
+        // For raw queries, we can't easily get the true total
+        if ($this->rawQuery) {
+            return 0; // Will be overridden by caller
+        }
+
+        // Create a COUNT query without limit/offset
+        $countBuilder = clone $this;
+        $usesSqlQueryMode = $countBuilder->usesSqlQueryMode();
+
+        $countBuilder->limit = null;
+        $countBuilder->offset = null;
+        $countBuilder->sort = [];  // Remove sort for faster counting
+        $countBuilder->highlight = false;  // Remove highlighting
+        $countBuilder->scriptFields = [];  // Remove script fields
+
+        if (!empty($countBuilder->groupBy) && !array_key_exists('accurate_aggregation', $countBuilder->option)) {
+            $countBuilder->option('accurate_aggregation', 1);
+        }
+        
+        // Set a large max_matches to ensure we get the real total
+        $countBuilder->option('max_matches', 1000000);
+
+        try {
+            if ($usesSqlQueryMode) {
+                // SQL query path
+                $sql = $countBuilder->buildSqlQuery();
+                $resultSet = $countBuilder->executeSqlQuery($sql, true);
+            } else {
+                // Search API path
+                $resultSet = $countBuilder->search()->get();
+            }
+            
+            $total = $countBuilder->extractTotalFromResultSet($resultSet, 0);
+            
+            // Cache the result
+            if ($total > 0) {
+                Cache::put($cacheKey, $total, now()->addSeconds($this->getPaginationTotalCacheTtl()));
+            }
+            
+            return $total;
+        } catch (\Throwable $e) {
+            // Fallback: return 0, will be handled by paginate()
+            Log::warning('Failed to get total matches for pagination', [
+                'error' => $e->getMessage(),
+                'context' => get_class($this),
+            ]);
+            return 0;
+        }
+    }
+
+    /**
+     * Flush the pagination total cache for all contexts.
+     */
+    public function flushPaginationTotalCache(): static
+    {
+        Cache::forget($this->getPaginationCacheKey());
+        return $this;
+    }
+
+    protected function canUseOptimizedConsolidatedPagination(): bool
+    {
+        if ($this->rawQuery || !empty($this->groupBy) || !empty($this->having) || !empty($this->select)) {
+            return false;
+        }
+
+        $method = new \ReflectionMethod($this, 'getRawRowsForCurrentQuery');
+
+        return $method->getDeclaringClass()->getName() === self::class;
+    }
+
+    protected function canUseSqlGroupedConsolidatedPagination(string $groupField): bool
+    {
+        if ($this->rawQuery || !$this->usesSqlQueryMode()) {
+            return false;
+        }
+
+        if (count($this->groupBy) !== 1) {
+            return false;
+        }
+
+        return strcasecmp((string) $this->groupBy[0], $groupField) === 0;
+    }
+
+    protected function groupValueKey(mixed $value): string
+    {
+        if ($value === null) {
+            return '__null__';
+        }
+
+        if (is_scalar($value)) {
+            return (string) $value;
+        }
+
+        return md5(serialize($value));
+    }
+
+    protected function fetchConsolidatedPageKeyRows(string $groupField, int $perPage, int $page): array
+    {
+        $offset = max(0, ($page - 1) * $perPage);
+        $groupedBuilder = clone $this;
+
+        $groupedBuilder->groupBy([$groupField]);
+        $groupedBuilder->select([$groupField]);
+        $groupedBuilder->limit($perPage)->offset($offset);
+
+        if (!array_key_exists('accurate_aggregation', $groupedBuilder->option)) {
+            $groupedBuilder->option('accurate_aggregation', 1);
+        }
+
+        if (!array_key_exists('max_matches', $groupedBuilder->option)) {
+            // Use a large max_matches to ensure we get the actual total groups
+            // while still only returning $perPage results
+            $groupedBuilder->option('max_matches', 1000000);
+        }
+
+        // Use true to get ResultSet object with getTotal() method, not array
+        $resultSet = $groupedBuilder->executeSqlQuery($groupedBuilder->buildSqlQuery(), true);
+        $rows = $groupedBuilder->extractRawRows($resultSet);
+        $total = $groupedBuilder->extractTotalFromResultSet($resultSet, count($rows));
+
+        return ['rows' => $rows, 'total' => $total];
+    }
+
+    protected function fetchConsolidatedHistoryRows(string $groupField, array $groupValues): array
+    {
+        if (empty($groupValues)) {
+            return [];
+        }
+
+        $historyBuilder = clone $this;
+        $historyBuilder->limit = null;
+        $historyBuilder->offset = null;
+        $historyBuilder->groupBy = [];
+        $historyBuilder->having = [];
+        $historyBuilder->select = [];
+        $historyBuilder->whereIn($groupField, $groupValues);
+
+        if (!array_key_exists('max_matches', $historyBuilder->option)) {
+            $historyBuilder->option('max_matches', $historyBuilder->configuredMaxMatches());
+        }
+
+        return $historyBuilder->getRawRowsForCurrentQuery();
+    }
+
+    protected function reorderConsolidatedRowsByGroupField(array $consolidatedRows, string $groupField, array $orderedGroupValues): array
+    {
+        $rowsByKey = [];
+
+        foreach ($consolidatedRows as $row) {
+            $rowsByKey[$this->groupValueKey($this->resolveRowFieldValue($row, $groupField))] = $row;
+        }
+
+        $ordered = [];
+
+        foreach ($orderedGroupValues as $groupValue) {
+            $key = $this->groupValueKey($groupValue);
+
+            if (isset($rowsByKey[$key])) {
+                $ordered[] = $rowsByKey[$key];
+            }
+        }
+
+        return $ordered;
+    }
+
+    protected function paginateConsolidatedOptimized(
+        string $groupField,
+        int $perPage,
+        int $page,
+        string $historyAttribute,
+        bool $preserveGroupFieldInHistory
+    ): array {
+        $groupedPage = $this->fetchConsolidatedPageKeyRows($groupField, $perPage, $page);
+        $pageGroupRows = $groupedPage['rows'];
+        $total = $groupedPage['total'];
+
+        if (empty($pageGroupRows)) {
+            return ['rows' => [], 'total' => $total];
+        }
+
+        $orderedGroupValues = [];
+        foreach ($pageGroupRows as $row) {
+            $groupValue = $this->resolveRowFieldValue($row, $groupField);
+
+            if ($groupValue !== null) {
+                $orderedGroupValues[] = $groupValue;
+            }
+        }
+
+        $historyRows = $this->fetchConsolidatedHistoryRows($groupField, $orderedGroupValues);
+
+        $consolidatedRows = $this->consolidateRawRows(
+            $historyRows,
+            $groupField,
+            $historyAttribute,
+            $preserveGroupFieldInHistory
+        );
+
+        return [
+            'rows' => $this->reorderConsolidatedRowsByGroupField($consolidatedRows, $groupField, $orderedGroupValues),
+            'total' => $total,
+        ];
+    }
+
+    protected function paginateConsolidatedFallback(
+        string $groupField,
+        int $perPage,
+        int $page,
+        string $historyAttribute,
+        bool $preserveGroupFieldInHistory
+    ): array {
+        \Illuminate\Support\Facades\Log::debug('paginateConsolidatedFallback called', [
+            'groupField' => $groupField,
+            'canUseSqlGroupedConsolidatedPagination' => $this->canUseSqlGroupedConsolidatedPagination($groupField),
+        ]);
+
+        if ($this->canUseSqlGroupedConsolidatedPagination($groupField)) {
+            return $this->paginateConsolidatedSqlGrouped(
+                $groupField,
+                $perPage,
+                $page,
+                $historyAttribute,
+                $preserveGroupFieldInHistory
+            );
+        }
+
+        $source = $this->getRawRowsForConsolidatedFallback($groupField);
+        $rows = $source['rows'];
+
+        \Illuminate\Support\Facades\Log::debug('paginateConsolidatedFallback non-sql path', [
+            'retrievedRows.count' => count($rows),
+            'source.total' => $source['total'] ?? null,
+        ]);
+
+        if (empty($rows)) {
+            return ['rows' => [], 'total' => 0];
+        }
+
+        $consolidatedRows = $this->consolidateRawRows(
+            $rows,
+            $groupField,
+            $historyAttribute,
+            $preserveGroupFieldInHistory
+        );
+
+        $total = $source['total'] ?? count($consolidatedRows);
+        $offset = max(0, ($page - 1) * $perPage);
+
+        \Illuminate\Support\Facades\Log::debug('paginateConsolidatedFallback consolidation result', [
+            'rawRows.count' => count($rows),
+            'consolidatedRows.count' => count($consolidatedRows),
+            'slicing.offset' => $offset,
+            'slicing.perPage' => $perPage,
+            'sliced.count' => count(array_slice($consolidatedRows, $offset, $perPage)),
+            'total' => $total,
+        ]);
+
+        return [
+            'rows' => array_slice($consolidatedRows, $offset, $perPage),
+            'total' => $total,
+        ];
+    }
+
+    protected function paginateConsolidatedSqlGrouped(
+        string $groupField,
+        int $perPage,
+        int $page,
+        string $historyAttribute,
+        bool $preserveGroupFieldInHistory
+    ): array {
+        $offset = max(0, ($page - 1) * $perPage);
+        $builder = clone $this;
+
+        $builder->limit($perPage)->offset($offset);
+
+        if (!array_key_exists('accurate_aggregation', $builder->option)) {
+            $builder->option('accurate_aggregation', 1);
+        }
+
+        if (!array_key_exists('max_matches', $builder->option)) {
+            $builder->option('max_matches', max(
+                (int) config('manticore.unlimited_max_matches', 1000000),
+                $offset + $perPage
+            ));
+        }
+
+        $resultSet = $builder->executeSqlQuery($builder->buildSqlQuery(), true);
+        $rows = $builder->extractRawRows($resultSet);
+        $total = $builder->extractTotalFromResultSet($resultSet, count($rows));
+
+        \Illuminate\Support\Facades\Log::debug('paginateConsolidatedSqlGrouped', [
+            'groupField' => $groupField,
+            'perPage' => $perPage,
+            'page' => $page,
+            'offset' => $offset,
+            'resultSet.total' => $total,
+            'extractedRows.count' => count($rows),
+            'rows' => array_slice($rows, 0, 3), // First 3 rows
+        ]);
+
+        if (empty($rows)) {
+            return ['rows' => [], 'total' => $total];
+        }
+
+        $consolidated = $builder->consolidateRawRows(
+            $rows,
+            $groupField,
+            $historyAttribute,
+            $preserveGroupFieldInHistory
+        );
+
+        \Illuminate\Support\Facades\Log::debug('After consolidateRawRows', [
+            'before_count' => count($rows),
+            'after_count' => count($consolidated),
+            'consolidated' => array_slice($consolidated, 0, 2), // First 2 consolidated items
+        ]);
+
+        return [
+            'rows' => $consolidated,
+            'total' => $total,
+        ];
+    }
+
+    protected function canReuseSourceTotalForConsolidatedFallback(string $groupField): bool
+    {
+        if (empty($this->groupBy) || count($this->groupBy) !== 1) {
+            return false;
+        }
+
+        return strcasecmp((string) $this->groupBy[0], $groupField) === 0;
+    }
+
+    protected function getRawRowsForConsolidatedFallback(string $groupField): array
+    {
+        $previousLimit = $this->limit;
+        $previousOffset = $this->offset;
+        $hadMaxMatches = array_key_exists('max_matches', $this->option);
+        $previousMaxMatches = $this->option['max_matches'] ?? null;
+        $hadAccurateAggregation = array_key_exists('accurate_aggregation', $this->option);
+        $previousAccurateAggregation = $this->option['accurate_aggregation'] ?? null;
+
+        try {
+            $unlimitedMaxMatches = (int) config('manticore.unlimited_max_matches', 1000000);
+
+            $this->offset = 0;
+            $this->limit = $unlimitedMaxMatches;
+            $this->option('max_matches', $unlimitedMaxMatches);
+
+            if ($this->usesSqlQueryMode() && !empty($this->groupBy) && !$hadAccurateAggregation) {
+                $this->option('accurate_aggregation', 1);
+            }
+
+            if ($this->usesSqlQueryMode()) {
+                $resultSet = $this->executeSqlQuery($this->buildSqlQuery(), true);
+                $rows = $this->extractRawRows($resultSet);
+
+                if ($this->canReuseSourceTotalForConsolidatedFallback($groupField)) {
+                    return [
+                        'rows' => $rows,
+                        'total' => $this->extractTotalFromResultSet($resultSet, count($rows)),
+                    ];
+                }
+
+                return ['rows' => $rows, 'total' => null];
+            }
+
+            return ['rows' => $this->getRawRowsForCurrentQuery(), 'total' => null];
+        } finally {
+            $this->limit = $previousLimit;
+            $this->offset = $previousOffset;
+
+            if ($hadMaxMatches) {
+                $this->option['max_matches'] = $previousMaxMatches;
+            } else {
+                unset($this->option['max_matches']);
+            }
+
+            if ($hadAccurateAggregation) {
+                $this->option['accurate_aggregation'] = $previousAccurateAggregation;
+            } else {
+                unset($this->option['accurate_aggregation']);
+            }
+        }
+    }
+
+    protected function extractTotalFromResultSet(mixed $resultSet, int $fallback = 0): int
+    {
+        if (!is_object($resultSet) || !method_exists($resultSet, 'getTotal')) {
+            return $fallback;
+        }
+
+        $total = $resultSet->getTotal();
+
+        if (is_numeric($total)) {
+            return (int) $total;
+        }
+
+        if (is_array($total) && isset($total['value']) && is_numeric($total['value'])) {
+            return (int) $total['value'];
+        }
+
+        return $fallback;
+    }
+
+    protected function removePageKeysFromQuery(array $query, string $pageName): array
+    {
+        $normalizedPageName = strtolower($pageName);
+
+        foreach (array_keys($query) as $key) {
+            $normalizedKey = strtolower((string) $key);
+
+            if ($normalizedKey === $normalizedPageName || $normalizedKey === 'page') {
+                unset($query[$key]);
+            }
+        }
+
+        return $query;
+    }
+
+    protected function resolvePageFromRequestInput(string $pageName, ?int $page): int
+    {
+        if (filled($page) && $page > 0) {
+            return $page;
+        }
+
+        if (app()->bound('request')) {
+            $request = app('request');
+
+            if ($request instanceof Request) {
+                $input = $request->input();
+                $normalizedPageName = strtolower($pageName);
+
+                foreach ($input as $key => $value) {
+                    $normalizedKey = strtolower((string) $key);
+
+                    if ($normalizedKey !== $normalizedPageName && $normalizedKey !== 'page') {
+                        continue;
+                    }
+
+                    if (is_numeric($value) && (int) $value > 0) {
+                        return (int) $value;
+                    }
+                }
+            }
+        }
+
+        $resolvedPage = LengthAwarePaginator::resolveCurrentPage($pageName);
+
+        return $resolvedPage > 0 ? $resolvedPage : 1;
+    }
+
+    protected function paginationContextKeyName(): string
+    {
+        return (string) config('manticore.pagination.context_key', '_mctx');
+    }
+
+    protected function paginationContextPrefix(): string
+    {
+        return (string) config('manticore.pagination.cache_prefix', 'manticore:pagination:');
+    }
+
+    protected function paginationContextTtlSeconds(): int
+    {
+        return (int) config('manticore.pagination.context_ttl', 900);
+    }
+
+    protected function maxPaginationQueryLength(): int
+    {
+        return (int) config('manticore.pagination.max_query_length', 1500);
+    }
+
+    protected function paginationContextCacheKey(string $contextId): string
+    {
+        return $this->paginationContextPrefix().$contextId;
+    }
+
+    protected function loadPaginationContext(string $contextId): array
+    {
+        $cached = Cache::get($this->paginationContextCacheKey($contextId));
+
+        return is_array($cached) ? $cached : [];
+    }
+
+    protected function storePaginationContext(array $filters): string
+    {
+        $contextId = Str::random(40);
+
+        Cache::put(
+            $this->paginationContextCacheKey($contextId),
+            $filters,
+            now()->addSeconds($this->paginationContextTtlSeconds())
+        );
+
+        return $contextId;
+    }
+
+    protected function shouldUsePaginationContext(array $filters): bool
+    {
+        return strlen(http_build_query($filters)) > $this->maxPaginationQueryLength();
+    }
+
+    protected function resolvePaginationInput(string $pageName, Request $request): array
+    {
+        $input = $request->input();
+        $contextKey = $this->paginationContextKeyName();
+
+        $contextId = $input[$contextKey] ?? null;
+        if (is_string($contextId) && $contextId !== '') {
+            $cached = $this->loadPaginationContext($contextId);
+
+            if (!empty($cached)) {
+                $input = array_replace_recursive($cached, $input);
+            }
+        }
+
+        $input = $this->removePageKeysFromQuery($input, $pageName);
+
+        return $input;
+    }
+
+    public static function resolvePaginationInputFromRequest(string $pageName = 'page', ?Request $request = null): array
+    {
+        $request = $request ?? (app()->bound('request') ? app('request') : null);
+
+        if (!$request instanceof Request) {
+            return [];
+        }
+
+        $contextKey = (string) config('manticore.pagination.context_key', '_mctx');
+        $cachePrefix = (string) config('manticore.pagination.cache_prefix', 'manticore:pagination:');
+        $input = $request->input();
+
+        $contextId = $input[$contextKey] ?? null;
+        if (is_string($contextId) && $contextId !== '') {
+            $cached = Cache::get($cachePrefix.$contextId);
+
+            if (is_array($cached) && !empty($cached)) {
+                $input = array_replace_recursive($cached, $input);
+            }
+        }
+
+        return $input;
+    }
+
+    protected function resolvePaginatorOptions(string $pageName): array
+    {
+        $options = [
+            'path' => LengthAwarePaginator::resolveCurrentPath(),
+            'pageName' => $pageName,
+        ];
+
+        if (!app()->bound('request')) {
+            return $options;
+        }
+
+        $request = app('request');
+
+        if (!$request instanceof Request) {
+            return $options;
+        }
+
+        $query = $this->resolvePaginationInput($pageName, $request);
+
+        $contextKey = $this->paginationContextKeyName();
+
+        if ($this->shouldUsePaginationContext($query)) {
+            $contextId = $this->storePaginationContext($query);
+            $query = [$contextKey => $contextId];
+        } else {
+            unset($query[$contextKey]);
+        }
+
+        if (!empty($query)) {
+            $options['query'] = $query;
+        }
+
+        return $options;
+    }
+
     public function rawQuery(string $raw, bool $rawMode = false): static
     {
         $this->rawQuery = $raw;
@@ -76,8 +754,8 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
     public function match(string $keywords, ?string $field = null): static
     {
         $this->match[] = [
-            'field' => $field,
-            'keywords' => $keywords
+            'field' => $field ?: '*',
+            'keywords' => $keywords,
         ];
         return $this;
     }
@@ -309,8 +987,14 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 
     protected function fetchSqlQuery(): Collection
     {
+        $this->ensureAccurateAggregationOption();
+
         $sql = $this->buildSqlQuery();
-        return $this->rawQuery($sql)->fetchRawQuery();
+        $resultSet = $this->executeSqlQuery($sql, true);
+        $rows = $this->extractRawRows($resultSet);
+        $models = $this->hydrateModelsFromRows($rows);
+
+        return $this->applyEloquentWith($models);
     }
 
     public function get(): Collection
@@ -319,7 +1003,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             return $this->fetchRawQuery();
         }
 
-        if (!empty($this->groupBy) || !empty($this->having) || !empty($this->select)) {
+        if ($this->usesSqlQueryMode()) {
             return $this->fetchSqlQuery();
         }
 
@@ -379,19 +1063,80 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         return $this->applyEloquentWith($models);
     }
 
+    public function getConsolidatedBy(
+    string $groupField,
+    string $historyAttribute = 'history',
+    bool $preserveGroupFieldInHistory = true
+    ): Collection {
+        return $this->consolidateAllBy(
+            $groupField,
+            $historyAttribute,
+            $preserveGroupFieldInHistory
+        );
+    }
+
+    public function paginateConsolidatedBy(
+        string $groupField,
+        int $perPage = 15,
+        string $pageName = 'page',
+        ?int $page = null,
+        string $historyAttribute = 'history',
+        bool $preserveGroupFieldInHistory = true
+    ): LengthAwarePaginator {
+        $page = $this->resolvePageFromRequestInput($pageName, $page);
+        $paginatorOptions = $this->resolvePaginatorOptions($pageName);
+
+        $data = $this->canUseOptimizedConsolidatedPagination()
+            ? $this->paginateConsolidatedOptimized(
+                $groupField,
+                $perPage,
+                $page,
+                $historyAttribute,
+                $preserveGroupFieldInHistory
+            )
+            : $this->paginateConsolidatedFallback(
+                $groupField,
+                $perPage,
+                $page,
+                $historyAttribute,
+                $preserveGroupFieldInHistory
+            );
+
+        if (empty($data['rows'])) {
+            return new LengthAwarePaginator(
+                collect(),
+                (int) ($data['total'] ?? 0),
+                $perPage,
+                $page,
+                $paginatorOptions
+            );
+        }
+
+        $models = $this->hydrateModelsFromRows($data['rows']);
+        $results = $this->applyEloquentWith($models);
+
+        return new LengthAwarePaginator(
+            $results,
+            (int) ($data['total'] ?? $results->count()),
+            $perPage,
+            $page,
+            $paginatorOptions
+        );
+    }
+
     protected function getRawRowsForCurrentQuery(): array
     {
         if ($this->rawQuery) {
-            $client = $this->getClient();
-            $results = $client->sql($this->rawQuery, $this->rawQueryMode);
+            $results = $this->executeSqlQuery($this->rawQuery, $this->rawQueryMode);
 
             return $this->extractRawRows($results);
         }
 
-        if (!empty($this->groupBy) || !empty($this->having) || !empty($this->select)) {
-            $client = $this->getClient();
+        if ($this->usesSqlQueryMode()) {
+            $this->ensureAccurateAggregationOption();
+
             $sql = $this->buildSqlQuery();
-            $results = $client->sql($sql, false);
+            $results = $this->executeSqlQuery($sql, true);
 
             return $this->extractRawRows($results);
         }
@@ -433,17 +1178,47 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 
     public function paginate(int $perPage = 15, string $pageName = 'page', ?int $page = null): LengthAwarePaginator
     {
-        $page = $page ?: LengthAwarePaginator::resolveCurrentPage($pageName);
-        $this->limit($perPage)->offset(($page - 1) * $perPage);
+        $page = $this->resolvePageFromRequestInput($pageName, $page);
+        $paginatorOptions = $this->resolvePaginatorOptions($pageName);
+        $offset = max(0, ($page - 1) * $perPage);
+        
+        if (!array_key_exists('max_matches', $this->option)) {
+            $this->option('max_matches', $this->maxMatchesForOffsetWindow($offset, $perPage));
+        }
+
+        if ($this->usesSqlQueryMode()) {
+            $this->ensureAccurateAggregationOption();
+        }
+        
+        $this->limit($perPage)->offset($offset);
 
         if ($this->rawQuery) {
             $results = $this->fetchRawQuery();
             $total = $results->count();
-        }else{
-            $resultSet = $this->search()->get();
+        } else {
+            // Get the real total BEFORE executing the paginated query
+            // This ensures we get the count of all matching documents, not just what's in this page
+            $total = $this->getTotalMatches();
+            
+            // Execute the paginated query using the correct mode
+            if ($this->usesSqlQueryMode()) {
+                $resultSet = $this->executeSqlQuery($this->buildSqlQuery(), true);
+            } else {
+                $resultSet = $this->search()->get();
+            }
+
             $rows = $this->extractRawRows($resultSet);
             $results = $this->applyEloquentWith($this->hydrateModelsFromRows($rows));
-            $total = $resultSet ? $resultSet->getTotal() : $results->count();
+            
+            // If getTotalMatches() failed, fallback to result count with warning
+            if ($total === 0 && $results->count() > 0) {
+                Log::warning('getTotalMatches() returned 0, using result count as fallback', [
+                    'page' => $page,
+                    'perPage' => $perPage,
+                    'resultCount' => $results->count(),
+                ]);
+                $total = $results->count();
+            }
         }
 
         return new LengthAwarePaginator(
@@ -451,7 +1226,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             $total,
             $perPage,
             $page,
-            ['path' => LengthAwarePaginator::resolveCurrentPath()]
+            $paginatorOptions
         );
     }
 

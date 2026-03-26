@@ -36,6 +36,7 @@ return [
             'timeout' => env('MANTICORE_TIMEOUT', 5),
             'persistent' => env('MANTICORE_PERSISTENT', false),
             'max_matches' => env('MANTICORE_MAX_MATCHES', 1000),
+            'limit_results' => env('MANTICORE_LIMIT_RESULTS', false),
         ],
     ],
 
@@ -58,4 +59,27 @@ return [
     'timeout' => env('MANTICORE_TIMEOUT', 5),
     'persistent' => env('MANTICORE_PERSISTENT', false),
     'max_matches' => env('MANTICORE_MAX_MATCHES', 1000),
+    'limit_results' => env('MANTICORE_LIMIT_RESULTS', false),
+    'unlimited_max_matches' => env('MANTICORE_UNLIMITED_MAX_MATCHES', 1000000),
+    /*
+    |--------------------------------------------------------------------------
+    | Pagination Context for Large Filter Payloads
+    |--------------------------------------------------------------------------
+    |
+    | When filter payloads become too large for safe URL query strings, the
+    | builder stores filters in cache and uses a short context token on
+    | pagination links.
+    |
+    | total_cache_ttl: Cache duration for pagination totals (in seconds).
+    | Set this to cache the total count across pagination requests.
+    |
+    */
+
+    'pagination' => [
+        'context_key' => env('MANTICORE_PAGINATION_CONTEXT_KEY', '_mctx'),
+        'max_query_length' => env('MANTICORE_PAGINATION_MAX_QUERY_LENGTH', 1500),
+        'context_ttl' => env('MANTICORE_PAGINATION_CONTEXT_TTL', 900),
+        'cache_prefix' => env('MANTICORE_PAGINATION_CACHE_PREFIX', 'manticore:pagination:'),
+        'total_cache_ttl' => env('MANTICORE_PAGINATION_TOTAL_CACHE_TTL', 300), // 5 minutes
+    ],
 ];
