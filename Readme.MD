@@ -179,6 +179,23 @@ Company::manticore()
     ->get();
 ```
 
+### Paginate with Consolidation (for large result sets)
+```php
+Company::manticore()
+    ->match('startup')
+    ->paginateConsolidatedBy(10);
+```
+
+### Consolidate one result by a specific attribute (e.g. company_id)
+#### Note: This is not pagination, just a way to consolidate many DOCS from the same attribute by a specific attribute in one result.
+```php
+Company::manticore()
+    ->match('startup')
+    ->consolidateBy('company_id');
+```
+
+##
+
 ### Optional Facade
 ```php
 use ManticoreLaravel\Facades\Manticore;
