@@ -156,7 +156,6 @@ abstract class ManticoreBuilderAbstract
     protected function executeSqlQuery(string $sql, ?bool $rawMode = null): mixed
     {
         $client = $this->getClient();
-
         return $client->sql($sql, $rawMode ?? $this->rawQueryMode);
     }
 
