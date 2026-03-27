@@ -40,10 +40,6 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         $signatureBuilder->offset = null;
         $signatureBuilder->sort = [];
 
-        if ($signatureBuilder->usesSqlQueryMode()) {
-            $signatureBuilder->option('accurate_aggregation', $signatureBuilder->option['accurate_aggregation'] ?? 1);
-        }
-
         $signatureOptions = $signatureBuilder->option;
         unset($signatureOptions['max_matches']);
 
@@ -75,19 +71,12 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
      */
     protected function getPaginationTotalCacheTtl(): int
     {
-        return (int) config('manticore.pagination.total_cache_ttl', 300); // 5 minutes default
+        return (int) config('manticore.pagination.total_cache_ttl', 300);
     }
 
     protected function usesSqlQueryMode(): bool
     {
         return !empty($this->groupBy) || !empty($this->having) || !empty($this->select);
-    }
-
-    protected function ensureAccurateAggregationOption(): void
-    {
-        if (!empty($this->groupBy) && !array_key_exists('accurate_aggregation', $this->option)) {
-            $this->option('accurate_aggregation', 1);
-        }
     }
 
     /**
@@ -98,59 +87,61 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
      */
     protected function getTotalMatches(): int
     {
-        // Check cache first
         $cacheKey = $this->getPaginationCacheKey();
         $cachedTotal = Cache::get($cacheKey);
-        
+
         if (is_numeric($cachedTotal)) {
             return (int) $cachedTotal;
         }
 
-        // For raw queries, we can't easily get the true total
         if ($this->rawQuery) {
-            return 0; // Will be overridden by caller
+            return 0;
         }
-
-        // Create a COUNT query without limit/offset
-        $countBuilder = clone $this;
-        $usesSqlQueryMode = $countBuilder->usesSqlQueryMode();
-
-        $countBuilder->limit = null;
-        $countBuilder->offset = null;
-        $countBuilder->sort = [];  // Remove sort for faster counting
-        $countBuilder->highlight = false;  // Remove highlighting
-        $countBuilder->scriptFields = [];  // Remove script fields
-
-        if (!empty($countBuilder->groupBy) && !array_key_exists('accurate_aggregation', $countBuilder->option)) {
-            $countBuilder->option('accurate_aggregation', 1);
-        }
-        
-        // Set a large max_matches to ensure we get the real total
-        $countBuilder->option('max_matches', 1000000);
 
         try {
-            if ($usesSqlQueryMode) {
-                // SQL query path
+            $groupField = $this->groupBy[0] ?? null;
+
+            if ($groupField) {
+                $countBuilder = clone $this;
+                $countBuilder->limit = null;
+                $countBuilder->offset = null;
+                $countBuilder->sort = [];
+                $countBuilder->groupBy = [];
+                $countBuilder->having = [];
+                $countBuilder->highlight = false;
+                $countBuilder->scriptFields = [];
+
+                $countBuilder->select = ["COUNT(DISTINCT {$groupField}) as cc"];
+                $countBuilder->option('max_matches', 1000000);
+                $countBuilder->option('distinct_precision_threshold', 0);
+
                 $sql = $countBuilder->buildSqlQuery();
                 $resultSet = $countBuilder->executeSqlQuery($sql, true);
+                $rows = $countBuilder->extractRawRows($resultSet);
+
+                $total = (int) ($rows[0]['cc'] ?? 0);
             } else {
-                // Search API path
-                $resultSet = $countBuilder->search()->get();
+                $countBuilder = clone $this;
+                $countBuilder->limit = 1;
+                $countBuilder->offset = 0;
+                $countBuilder->sort = [];
+                $countBuilder->highlight = false;
+                $countBuilder->scriptFields = [];
+                $countBuilder->option('max_matches', 1000000);
+
+                $resultSet = $countBuilder->executeSqlQuery($countBuilder->buildSqlQuery(), true);
+                $total = $countBuilder->extractTotalFromResultSet($resultSet, 0);
             }
-            
-            $total = $countBuilder->extractTotalFromResultSet($resultSet, 0);
-            
-            // Cache the result
+
             if ($total > 0) {
                 Cache::put($cacheKey, $total, now()->addSeconds($this->getPaginationTotalCacheTtl()));
             }
-            
+
             return $total;
+
         } catch (\Throwable $e) {
-            // Fallback: return 0, will be handled by paginate()
             Log::warning('Failed to get total matches for pagination', [
                 'error' => $e->getMessage(),
-                'context' => get_class($this),
             ]);
             return 0;
         }
@@ -211,17 +202,10 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         $groupedBuilder->select([$groupField]);
         $groupedBuilder->limit($perPage)->offset($offset);
 
-        if (!array_key_exists('accurate_aggregation', $groupedBuilder->option)) {
-            $groupedBuilder->option('accurate_aggregation', 1);
-        }
-
         if (!array_key_exists('max_matches', $groupedBuilder->option)) {
-            // Use a large max_matches to ensure we get the actual total groups
-            // while still only returning $perPage results
             $groupedBuilder->option('max_matches', 1000000);
         }
 
-        // Use true to get ResultSet object with getTotal() method, not array
         $resultSet = $groupedBuilder->executeSqlQuery($groupedBuilder->buildSqlQuery(), true);
         $rows = $groupedBuilder->extractRawRows($resultSet);
         $total = $groupedBuilder->extractTotalFromResultSet($resultSet, count($rows));
@@ -236,18 +220,29 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         }
 
         $historyBuilder = clone $this;
-        $historyBuilder->limit = null;
-        $historyBuilder->offset = null;
+        $unlimitedMaxMatches = (int) config('manticore.unlimited_max_matches', 1000000);
+
+        $historyBuilder->limit = $unlimitedMaxMatches;
+        $historyBuilder->offset = 0;
+        $historyBuilder->sort = [];
         $historyBuilder->groupBy = [];
         $historyBuilder->having = [];
         $historyBuilder->select = [];
         $historyBuilder->whereIn($groupField, $groupValues);
 
         if (!array_key_exists('max_matches', $historyBuilder->option)) {
-            $historyBuilder->option('max_matches', $historyBuilder->configuredMaxMatches());
+            $historyBuilder->option('max_matches', $unlimitedMaxMatches);
         }
 
-        return $historyBuilder->getRawRowsForCurrentQuery();
+        $method = new \ReflectionMethod($historyBuilder, 'getRawRowsForCurrentQuery');
+
+        if ($method->getDeclaringClass()->getName() !== self::class) {
+            return $historyBuilder->getRawRowsForCurrentQuery();
+        }
+
+        $resultSet = $historyBuilder->executeSqlQuery($historyBuilder->buildSqlQuery(), true);
+
+        return $historyBuilder->extractRawRows($resultSet);
     }
 
     protected function reorderConsolidatedRowsByGroupField(array $consolidatedRows, string $groupField, array $orderedGroupValues): array
@@ -317,35 +312,36 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         string $historyAttribute,
         bool $preserveGroupFieldInHistory
     ): array {
-        if ($this->canUseSqlGroupedConsolidatedPagination($groupField)) {
-            return $this->paginateConsolidatedSqlGrouped(
-                $groupField,
-                $perPage,
-                $page,
-                $historyAttribute,
-                $preserveGroupFieldInHistory
-            );
+
+        $offset = max(0, ($page - 1) * $perPage);
+        $builder = clone $this;
+
+        $builder->limit($perPage)->offset($offset);
+
+        $resultSet = $builder->executeSqlQuery($builder->buildSqlQuery(), true);
+        $rows = $builder->extractRawRows($resultSet);
+        $total = $builder->extractTotalFromResultSet($resultSet, count($rows));
+
+        $orderedGroupValues = [];
+        foreach ($rows as $row) {
+            $groupValue = $this->resolveRowFieldValue($row, $groupField);
+
+            if ($groupValue !== null) {
+                $orderedGroupValues[] = $groupValue;
+            }
         }
 
-        $source = $this->getRawRowsForConsolidatedFallback($groupField);
-        $rows = $source['rows'];
+        $historyRows = $this->fetchConsolidatedHistoryRows($groupField, $orderedGroupValues);
 
-        if (empty($rows)) {
-            return ['rows' => [], 'total' => 0];
-        }
-
-        $consolidatedRows = $this->consolidateRawRows(
-            $rows,
+        $pageConsolidatedRows = $this->consolidateRawRows(
+            $historyRows,
             $groupField,
             $historyAttribute,
             $preserveGroupFieldInHistory
         );
 
-        $total = $source['total'] ?? count($consolidatedRows);
-        $offset = max(0, ($page - 1) * $perPage);
-
         return [
-            'rows' => array_slice($consolidatedRows, $offset, $perPage),
+            'rows' => $this->reorderConsolidatedRowsByGroupField($pageConsolidatedRows, $groupField, $orderedGroupValues),
             'total' => $total,
         ];
     }
@@ -361,17 +357,6 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         $builder = clone $this;
 
         $builder->limit($perPage)->offset($offset);
-
-        if (!array_key_exists('accurate_aggregation', $builder->option)) {
-            $builder->option('accurate_aggregation', 1);
-        }
-
-        if (!array_key_exists('max_matches', $builder->option)) {
-            $builder->option('max_matches', max(
-                (int) config('manticore.unlimited_max_matches', 1000000),
-                $offset + $perPage
-            ));
-        }
 
         $resultSet = $builder->executeSqlQuery($builder->buildSqlQuery(), true);
         $rows = $builder->extractRawRows($resultSet);
@@ -416,10 +401,6 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             $this->offset = 0;
             $this->limit = $unlimitedMaxMatches;
             $this->option('max_matches', $unlimitedMaxMatches);
-
-            if ($this->usesSqlQueryMode() && !empty($this->groupBy) && !$hadAccurateAggregation) {
-                $this->option('accurate_aggregation', 1);
-            }
 
             if ($this->usesSqlQueryMode()) {
                 $resultSet = $this->executeSqlQuery($this->buildSqlQuery(), true);
@@ -950,8 +931,6 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 
     protected function fetchSqlQuery(): Collection
     {
-        $this->ensureAccurateAggregationOption();
-
         $sql = $this->buildSqlQuery();
         $resultSet = $this->executeSqlQuery($sql, true);
         $rows = $this->extractRawRows($resultSet);
@@ -1096,8 +1075,6 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         }
 
         if ($this->usesSqlQueryMode()) {
-            $this->ensureAccurateAggregationOption();
-
             $sql = $this->buildSqlQuery();
             $results = $this->executeSqlQuery($sql, true);
 
@@ -1148,10 +1125,6 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         if (!array_key_exists('max_matches', $this->option)) {
             $this->option('max_matches', $this->maxMatchesForOffsetWindow($offset, $perPage));
         }
-
-        if ($this->usesSqlQueryMode()) {
-            $this->ensureAccurateAggregationOption();
-        }
         
         $this->limit($perPage)->offset($offset);
 
@@ -1159,11 +1132,8 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             $results = $this->fetchRawQuery();
             $total = $results->count();
         } else {
-            // Get the real total BEFORE executing the paginated query
-            // This ensures we get the count of all matching documents, not just what's in this page
             $total = $this->getTotalMatches();
-            
-            // Execute the paginated query using the correct mode
+        
             if ($this->usesSqlQueryMode()) {
                 $resultSet = $this->executeSqlQuery($this->buildSqlQuery(), true);
             } else {
@@ -1173,7 +1143,6 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             $rows = $this->extractRawRows($resultSet);
             $results = $this->applyEloquentWith($this->hydrateModelsFromRows($rows));
             
-            // If getTotalMatches() failed, fallback to result count with warning
             if ($total === 0 && $results->count() > 0) {
                 Log::warning('getTotalMatches() returned 0, using result count as fallback', [
                     'page' => $page,

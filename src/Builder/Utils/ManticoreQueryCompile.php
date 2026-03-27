@@ -26,8 +26,17 @@ class ManticoreQueryCompile
         $clauses = [];
 
         if ($match) {
-            foreach($match as $m) {
-                $clauses[] = "MATCH('@{$m['field']} " . addslashes($m['keywords']) . "')";
+            foreach ($match as $m) {
+                if (!empty($m['field']) && str_contains($m['field'], '@')) {
+                    $field = $m['field'];
+                } elseif (!empty($m['field'])) {
+                    $field = "@{$m['field']}";
+                } else {
+                    $field = '@*';
+                }
+
+                $keywords = addslashes($m['keywords']);
+                $clauses[] = "MATCH('({$field} {$keywords})')";
             }
         }
 
@@ -55,12 +64,19 @@ class ManticoreQueryCompile
 
         if ($match) {
             foreach ($match as $m) {
-                $field = !empty($m['field']) ? "@{$m['field']}" : '@*';
+                if (!empty($m['field']) && str_contains($m['field'], '@')) {
+                    $field = $m['field'];
+                } elseif (!empty($m['field'])) {
+                    $field = "@{$m['field']}";
+                } else {
+                    $field = '@*';
+                }
+
                 $keywords = addslashes($m['keywords']);
-                $clauses[] = "MATCH('{$field} {$keywords}')";
+                $clauses[] = "MATCH('({$field} {$keywords})')";
             }
         }
-
+        
         foreach ($sequence as $index => $item) {
             $boolean = strtoupper($item['boolean'] ?? 'AND');
             $negated = (bool)($item['negated'] ?? false);
@@ -122,9 +138,9 @@ class ManticoreQueryCompile
         if (isset($condition['match'])) {
             $value = addslashes($condition['match']['*'] ?? reset($condition['match']));
             if ($negated) {
-                return "NOT MATCH('@* {$value}')";
+                return "NOT MATCH('(@* {$value})')";
             }
-            return "MATCH('@* {$value}')";
+            return "MATCH('(@* {$value})')";
         }
 
         if (isset($condition['equals'])) {
