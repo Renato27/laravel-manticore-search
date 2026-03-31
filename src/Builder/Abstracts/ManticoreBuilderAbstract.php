@@ -701,7 +701,7 @@ abstract class ManticoreBuilderAbstract
         $orders = [];
         foreach ($this->sort as $s) {
             foreach ($s as $field => $dir) {
-                $orders[] = "`{$field}` " . strtoupper($dir);
+                $orders[] = ManticoreQueryCompile::compileFieldReference($field) . ' ' . strtoupper($dir);
             }
         }
 

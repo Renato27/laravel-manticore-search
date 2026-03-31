@@ -5,6 +5,7 @@ namespace ManticoreLaravel\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\Request;
 use Illuminate\Pagination\LengthAwarePaginator;
+use Illuminate\Support\Collection as SupportCollection;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -695,11 +696,12 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         return $this;
     }
 
-    public function match(string $keywords, ?string $field = null): static
+    public function match(string $keywords, ?string $field = null, string $boolean = 'AND'): static
     {
         $this->match[] = [
             'field' => $field ?: '*',
             'keywords' => $keywords,
+            'boolean' => $boolean,
         ];
         return $this;
     }
@@ -986,7 +988,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
         string $groupField,
         string $historyAttribute = 'history',
         bool $preserveGroupFieldInHistory = true
-    ): Collection {
+    ): SupportCollection {
         $rows = $this->getRawRowsForCurrentQuery();
 
         if (empty($rows)) {
@@ -1009,7 +1011,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
     string $groupField,
     string $historyAttribute = 'history',
     bool $preserveGroupFieldInHistory = true
-    ): Collection {
+    ): SupportCollection {
         return $this->consolidateAllBy(
             $groupField,
             $historyAttribute,
