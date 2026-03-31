@@ -112,7 +112,13 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
                 $countBuilder->highlight = false;
                 $countBuilder->scriptFields = [];
 
-                $countBuilder->select = ["COUNT(DISTINCT {$groupField}) as cc"];
+                if (!preg_match('/^[A-Za-z0-9_]+$/', $groupField)) {
+                    throw new \InvalidArgumentException(
+                        "Invalid group field identifier: '{$groupField}'"
+                    );
+                }
+
+                $countBuilder->select = ["COUNT(DISTINCT `{$groupField}`) as cc"];
                 $countBuilder->option('max_matches', 1000000);
                 $countBuilder->option('distinct_precision_threshold', 0);
 
