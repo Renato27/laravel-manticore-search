@@ -26,6 +26,8 @@ class ManticoreQueryCompile
         $clauses = [];
 
         if ($match) {
+            $matchParts = [];
+
             foreach ($match as $m) {
                 if (!empty($m['field']) && str_contains($m['field'], '@')) {
                     $field = $m['field'];
@@ -36,7 +38,18 @@ class ManticoreQueryCompile
                 }
 
                 $keywords = addslashes($m['keywords']);
-                $clauses[] = "MATCH('({$field} {$keywords})')";
+                $boolean  = strtoupper($m['boolean'] ?? 'AND');
+
+                if (empty($matchParts)) {
+                    $matchParts[] = "({$field} ({$keywords}))";
+                } else {
+                    $op = ($boolean === 'OR') ? '| ' : '';
+                    $matchParts[] = "{$op}({$field} ({$keywords}))";
+                }
+            }
+
+            if (!empty($matchParts)) {
+                $clauses[] = "MATCH('" . implode(' ', $matchParts) . "')";
             }
         }
 
@@ -63,6 +76,8 @@ class ManticoreQueryCompile
         $clauses = [];
 
         if ($match) {
+            $matchParts = [];
+
             foreach ($match as $m) {
                 if (!empty($m['field']) && str_contains($m['field'], '@')) {
                     $field = $m['field'];
@@ -73,10 +88,21 @@ class ManticoreQueryCompile
                 }
 
                 $keywords = addslashes($m['keywords']);
-                $clauses[] = "MATCH('({$field} {$keywords})')";
+                $boolean  = strtoupper($m['boolean'] ?? 'AND');
+
+                if (empty($matchParts)) {
+                    $matchParts[] = "({$field} ({$keywords}))";
+                } else {
+                    $op = ($boolean === 'OR') ? '| ' : '';
+                    $matchParts[] = "{$op}({$field} ({$keywords}))";
+                }
+            }
+
+            if (!empty($matchParts)) {
+                $clauses[] = "MATCH('" . implode(' ', $matchParts) . "')";
             }
         }
-        
+
         foreach ($sequence as $index => $item) {
             $boolean = strtoupper($item['boolean'] ?? 'AND');
             $negated = (bool)($item['negated'] ?? false);
@@ -85,7 +111,7 @@ class ManticoreQueryCompile
             $compiled = $negated
                 ? self::compileConditionSafeNegated($condition)
                 : self::compileConditionSafe($condition);
-            
+
             if (!$compiled) {
                 continue;
             }
@@ -96,7 +122,7 @@ class ManticoreQueryCompile
                 $clauses[] = "{$boolean} ({$compiled})";
             }
         }
-    
+
         return implode(' ', $clauses);
     }
 
@@ -147,7 +173,8 @@ class ManticoreQueryCompile
             foreach ($condition['equals'] as $field => $value) {
                 $val = self::compileScalarValue($value);
                 $operator = $negated ? '<>' : '=';
-                return "`{$field}` {$operator} {$val}";
+                $compiledField = self::compileFieldReference($field);
+                return "{$compiledField} {$operator} {$val}";
             }
         }
 
@@ -157,7 +184,8 @@ class ManticoreQueryCompile
                     return self::compileScalarValue($v);
                 }, $values);
                 $operator = $negated ? 'NOT IN' : 'IN';
-                return "`{$field}` {$operator} (" . implode(', ', $quoted) . ")";
+                $compiledField = self::compileFieldReference($field);
+                return "{$compiledField} {$operator} (" . implode(', ', $quoted) . ")";
             }
         }
 
@@ -173,7 +201,8 @@ class ManticoreQueryCompile
                         default => $negated ? '<>' : '='
                     };
                     $compiledVal = self::compileScalarValue($val);
-                    $rangeParts[] = "`{$field}` {$symbol} {$compiledVal}";
+                    $compiledField = self::compileFieldReference($field);
+                    $rangeParts[] = "{$compiledField} {$symbol} {$compiledVal}";
                 }
                 if ($negated && count($rangeParts) > 1) {
                     return implode(' OR ', $rangeParts);
@@ -183,6 +212,17 @@ class ManticoreQueryCompile
         }
 
         return '1 = 1';
+    }
+
+    public static function compileFieldReference(string $field): string
+    {
+        $field = trim($field);
+
+        if (preg_match('/[()\s,\.]/', $field)) {
+            return $field;
+        }
+
+        return "`{$field}`";
     }
 
     protected static function compileScalarValue(mixed $value): string
