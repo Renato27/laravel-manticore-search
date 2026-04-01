@@ -26,8 +26,30 @@ class ManticoreQueryCompile
         $clauses = [];
 
         if ($match) {
-            foreach($match as $m) {
-                $clauses[] = "MATCH('@{$m['field']} " . addslashes($m['keywords']) . "')";
+            $matchParts = [];
+
+            foreach ($match as $m) {
+                if (!empty($m['field']) && str_contains($m['field'], '@')) {
+                    $field = $m['field'];
+                } elseif (!empty($m['field'])) {
+                    $field = "@{$m['field']}";
+                } else {
+                    $field = '@*';
+                }
+
+                $keywords = addslashes($m['keywords']);
+                $boolean  = strtoupper($m['boolean'] ?? 'AND');
+
+                if (empty($matchParts)) {
+                    $matchParts[] = "({$field} ({$keywords}))";
+                } else {
+                    $op = ($boolean === 'OR') ? '| ' : '';
+                    $matchParts[] = "{$op}({$field} ({$keywords}))";
+                }
+            }
+
+            if (!empty($matchParts)) {
+                $clauses[] = "MATCH('" . implode(' ', $matchParts) . "')";
             }
         }
 
@@ -47,6 +69,61 @@ class ManticoreQueryCompile
         }
 
         return implode(' AND ', array_filter($clauses));
+    }
+
+    public static function toSqlWhereClauseFromSequence(array $sequence, ?array $match = null): string
+    {
+        $clauses = [];
+
+        if ($match) {
+            $matchParts = [];
+
+            foreach ($match as $m) {
+                if (!empty($m['field']) && str_contains($m['field'], '@')) {
+                    $field = $m['field'];
+                } elseif (!empty($m['field'])) {
+                    $field = "@{$m['field']}";
+                } else {
+                    $field = '@*';
+                }
+
+                $keywords = addslashes($m['keywords']);
+                $boolean  = strtoupper($m['boolean'] ?? 'AND');
+
+                if (empty($matchParts)) {
+                    $matchParts[] = "({$field} ({$keywords}))";
+                } else {
+                    $op = ($boolean === 'OR') ? '| ' : '';
+                    $matchParts[] = "{$op}({$field} ({$keywords}))";
+                }
+            }
+
+            if (!empty($matchParts)) {
+                $clauses[] = "MATCH('" . implode(' ', $matchParts) . "')";
+            }
+        }
+
+        foreach ($sequence as $index => $item) {
+            $boolean = strtoupper($item['boolean'] ?? 'AND');
+            $negated = (bool)($item['negated'] ?? false);
+            $condition = $item['condition'] ?? null;
+
+            $compiled = $negated
+                ? self::compileConditionSafeNegated($condition)
+                : self::compileConditionSafe($condition);
+
+            if (!$compiled) {
+                continue;
+            }
+
+            if (empty($clauses) && $index === 0) {
+                $clauses[] = "({$compiled})";
+            } else {
+                $clauses[] = "{$boolean} ({$compiled})";
+            }
+        }
+
+        return implode(' ', $clauses);
     }
 
     protected static function buildWhereClause(array $query): string
@@ -87,27 +164,28 @@ class ManticoreQueryCompile
         if (isset($condition['match'])) {
             $value = addslashes($condition['match']['*'] ?? reset($condition['match']));
             if ($negated) {
-                // For negated MATCH, we need to use a different approach
-                return "NOT MATCH('@* {$value}')";
+                return "NOT MATCH('(@* {$value})')";
             }
-            return "MATCH('@* {$value}')";
+            return "MATCH('(@* {$value})')";
         }
 
         if (isset($condition['equals'])) {
             foreach ($condition['equals'] as $field => $value) {
-                $val = is_numeric($value) ? $value : "'" . addslashes($value) . "'";
+                $val = self::compileScalarValue($value);
                 $operator = $negated ? '<>' : '=';
-                return "`{$field}` {$operator} {$val}";
+                $compiledField = self::compileFieldReference($field);
+                return "{$compiledField} {$operator} {$val}";
             }
         }
 
         if (isset($condition['in'])) {
             foreach ($condition['in'] as $field => $values) {
                 $quoted = array_map(function ($v) {
-                    return is_numeric($v) ? $v : "'" . addslashes($v) . "'";
+                    return self::compileScalarValue($v);
                 }, $values);
                 $operator = $negated ? 'NOT IN' : 'IN';
-                return "`{$field}` {$operator} (" . implode(', ', $quoted) . ")";
+                $compiledField = self::compileFieldReference($field);
+                return "{$compiledField} {$operator} (" . implode(', ', $quoted) . ")";
             }
         }
 
@@ -122,11 +200,11 @@ class ManticoreQueryCompile
                         'lt'  => $negated ? '>=' : '<',
                         default => $negated ? '<>' : '='
                     };
-                    $compiledVal = is_numeric($val) ? $val : "'" . addslashes($val) . "'";
-                    $rangeParts[] = "`{$field}` {$symbol} {$compiledVal}";
+                    $compiledVal = self::compileScalarValue($val);
+                    $compiledField = self::compileFieldReference($field);
+                    $rangeParts[] = "{$compiledField} {$symbol} {$compiledVal}";
                 }
                 if ($negated && count($rangeParts) > 1) {
-                    // For negated ranges with multiple conditions, use OR instead of AND
                     return implode(' OR ', $rangeParts);
                 }
                 return implode(' AND ', $rangeParts);
@@ -134,5 +212,33 @@ class ManticoreQueryCompile
         }
 
         return '1 = 1';
+    }
+
+    public static function compileFieldReference(string $field): string
+    {
+        $field = trim($field);
+
+        if (preg_match('/[()\s,\.]/', $field)) {
+            return $field;
+        }
+
+        return "`{$field}`";
+    }
+
+    protected static function compileScalarValue(mixed $value): string
+    {
+        if ($value === null) {
+            return 'NULL';
+        }
+
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return (string) $value;
+        }
+
+        return "'" . addslashes((string) $value) . "'";
     }
 }

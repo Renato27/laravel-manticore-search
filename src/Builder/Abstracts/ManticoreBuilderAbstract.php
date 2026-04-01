@@ -4,10 +4,9 @@ namespace ManticoreLaravel\Builder\Abstracts;
 
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Collection;
-use Illuminate\Pagination\LengthAwarePaginator;
 use ManticoreLaravel\Builder\Utils\ManticoreQueryCompile;
-use ManticoreLaravel\Builder\Utils\Utf8SafeClient;
 use ManticoreLaravel\Builder\Utils\Utf8SafeSearch;
+use ManticoreLaravel\Support\ManticoreManager;
 use Manticoresearch\Client;
 use Manticoresearch\Search;
 use Manticoresearch\Table;
@@ -33,48 +32,117 @@ abstract class ManticoreBuilderAbstract
     protected ?int $maxMatches = null;
     protected array $eagerQueue = [];
     protected array $scriptFields = [];
+    protected array $whereSequence = [];
+    protected array|string|null $indexOverride = null;
+    protected ?string $connectionName = null;
+
+    /**
+     * Lazily resolved and cached client for the lifetime of this builder instance.
+     * Avoids opening multiple connections during a single query chain.
+     */
+    private ?Client $client = null;
+
+    /**
+     * Cached resolved connection config for the lifetime of this builder instance.
+     * Avoids repeated container/config repository resolution.
+     */
+    private ?array $resolvedConnectionConfig = null;
+
+    /**
+     * Cached resolved index name for the lifetime of this builder instance.
+     */
+    private ?string $resolvedIndexName = null;
+
+    /**
+     * Cached candidate model attributes used during field mapping.
+     *
+     * @var array<int, string>|null
+     */
+    private ?array $modelAttributeCandidates = null;
+
+    /**
+     * Cached field maps keyed by normalized source-key signature.
+     *
+     * @var array<string, array<string, string>>
+     */
+    private array $fieldMapCache = [];
 
     public function __construct($model)
     {
         $this->model = $model;
     }
 
-    protected function resolveIndexName(): string
+    /**
+     * Resolve the active connection configuration through the centralized resolver.
+     * Supports legacy flat config, default named connection, and explicit named connections.
+     */
+    protected function resolveConnectionConfig(): array
     {
-        if (method_exists($this->model, 'searchableAs')) {
-            $indexes = $this->model->searchableAs();
-            if (is_array($indexes)) {
-                return implode(',', $indexes);
-            }
-            return $indexes;
+        if ($this->resolvedConnectionConfig === null) {
+            $this->resolvedConnectionConfig = app(ManticoreManager::class)
+                ->resolveConfig($this->connectionName);
         }
 
-        return $this->model->getTable();
+        return $this->resolvedConnectionConfig;
     }
 
-    protected function applyIndex(Search $search)
+    protected function resolveIndexName(): string
     {
-        $search->setTable($this->resolveIndexName());
+        if ($this->resolvedIndexName !== null) {
+            return $this->resolvedIndexName;
+        }
+
+        if ($this->indexOverride !== null) {
+            return $this->resolvedIndexName = is_array($this->indexOverride)
+                ? implode(',', $this->indexOverride)
+                : $this->indexOverride;
+        }
+
+        if (method_exists($this->model, 'searchableAs')) {
+            $indexes = $this->model->searchableAs();
+
+            if (is_array($indexes)) {
+                return $this->resolvedIndexName = implode(',', $indexes);
+            }
+
+            return $this->resolvedIndexName = $indexes;
+        }
+
+        return $this->resolvedIndexName = $this->model->getTable();
+    }
+
+    protected function applyIndex(Search $search): void
+    {
+        $indexName = $this->resolveIndexName();
+
+        $search->setTable($indexName);
 
         $ref = new \ReflectionClass($search);
         $prop = $ref->getProperty('params');
         $prop->setAccessible(true);
         $params = $prop->getValue($search);
-        $params['index'] = $params['table'] ?? $this->resolveIndexName();
+        $params['index'] = $params['table'] ?? $indexName;
         $prop->setValue($search, $params);
     }
 
     protected function getClient(): Client
     {
-        return new Utf8SafeClient([
-            'host' => config('manticore.host'),
-            'port' => config('manticore.port'),
-            'username' => config('manticore.username'),
-            'password' => config('manticore.password'),
-            'transport' => config('manticore.transport'),
-            'timeout' => config('manticore.timeout'),
-            'persistent' => config('manticore.persistent'),
-        ]);
+        if ($this->client === null) {
+            $this->client = app(ManticoreManager::class)->client($this->connectionName);
+        }
+
+        return $this->client;
+    }
+
+    protected function flushResolvedConnectionState(): void
+    {
+        $this->client = null;
+        $this->resolvedConnectionConfig = null;
+    }
+
+    protected function flushResolvedIndexState(): void
+    {
+        $this->resolvedIndexName = null;
     }
 
     protected function getTable(): Table
@@ -85,69 +153,252 @@ abstract class ManticoreBuilderAbstract
         return $table;
     }
 
-    protected function fetchRawQuery(): Collection
+    protected function executeSqlQuery(string $sql, ?bool $rawMode = null): mixed
     {
         $client = $this->getClient();
+        return $client->sql($sql, $rawMode ?? $this->rawQueryMode);
+    }
 
-        $results = $client->sql($this->rawQuery, $this->rawQueryMode);
-        $col = $this->resolveResults($results);
-        return $this->applyEloquentWith($col);
+     protected function fetchRawQuery(): Collection
+    {
+        $results = $this->executeSqlQuery($this->rawQuery, $this->rawQueryMode);
+
+        $rows = $this->extractRawRows($results);
+        $models = $this->hydrateModelsFromRows($rows);
+
+        return $this->applyEloquentWith($models);
     }
 
     protected function resolveResults($results): Collection
     {
-        if (is_array($results)) {
-            return $this->resolveResultsArray($results);
-        } else {
-            return $this->resolveResultsDefault($results);
-        }
+        $rows = $this->extractRawRows($results);
+
+        return $this->hydrateModelsFromRows($rows);
     }
 
-    private function resolveResultsDefault($results): Collection
+    protected function extractRawRows(mixed $results): array
+    {
+        if (is_array($results)) {
+            return $this->extractRawRowsFromArrayResult($results);
+        }
+
+        return $this->extractRawRowsFromDefaultResult($results);
+    }
+
+    protected function extractRawRowsFromDefaultResult(mixed $results): array
     {
         $hits = iterator_to_array($results);
-        $models = array_map(function ($hit) {
-            $model = clone $this->model;
-            $id = $this->getID($hit);
+
+        return array_map(function ($hit) {
             $raw = $hit->getData() ?? [];
-            if (filled($id)) $raw = ['id' => $id] + $raw;
+            $id = $this->getID($hit, is_array($raw) ? $raw : []);
+
+            if (filled($id)) {
+                $raw = ['id' => $id] + $raw;
+            }
 
             $data = $this->normalizeForModel($raw);
-            $pk = $model->getKeyName();
-            if (!empty($data[$pk])) $model->setAttribute($pk, $data[$pk]);
-            $model->forceFill($data);
-            try { $highlight = $hit->getHighlight(); if (!empty($highlight)) $model->highlight = $highlight; } catch (\Throwable $e) {}
-            $model->exists = true;
-            return $model;
+
+            try {
+                $highlight = $hit->getHighlight();
+                if (!empty($highlight)) {
+                    $data['_highlight'] = $highlight;
+                }
+            } catch (\Throwable $e) {
+            }
+
+            return $data;
         }, $hits);
+    }
+
+    protected function extractRawRowsFromArrayResult(array $results): array
+    {
+        if (isset($results['hits']['hits'])) {
+            $hits = iterator_to_array($results['hits']['hits']);
+
+            return array_map(function ($hit) {
+                $id = $this->getID($hit);
+                $raw = $hit['_source'] ?? [];
+
+                if (filled($id)) {
+                    $raw = ['id' => $id] + $raw;
+                }
+
+                return $this->normalizeForModel($raw);
+            }, $hits);
+        }
+
+        if (!array_is_list($results)) {
+            return [];
+        }
+
+        return array_map(function ($row) {
+            if (is_array($row) && isset($row['_source']) && is_array($row['_source'])) {
+                $id = $this->getID($row);
+                $raw = $row['_source'];
+
+                if (filled($id)) {
+                    $raw = ['id' => $id] + $raw;
+                }
+
+                return $this->normalizeForModel($raw);
+            }
+
+            if (is_array($row)) {
+                $id = $this->getID($row, $row);
+
+                if (filled($id) && !array_key_exists('id', $row)) {
+                    $row = ['id' => $id] + $row;
+                }
+
+                return $this->normalizeForModel($row);
+            }
+
+            return $this->normalizeForModel(['value' => $row]);
+        }, $results);
+    }
+
+    protected function hydrateModelsFromRows(array $rows): Collection
+    {
+        $models = array_map(function (array $row) {
+            return $this->hydrateModelFromRow($row);
+        }, $rows);
 
         return new Collection($models);
     }
 
-    private function resolveResultsArray($results): Collection
+    protected function hydrateModelFromRow(array $row): mixed
     {
-        $hits = $results['hits']['hits'] ?? [];
-        $hits = iterator_to_array($hits);
+        $model = clone $this->model;
+        $highlight = $row['_highlight'] ?? null;
+        unset($row['_highlight']);
 
-        $models = array_map(function ($hit) {
-            $model = clone $this->model;
-            $id = $this->getID($hit);
-            $raw = $hit['_source'] ?? [];
-            if (filled($id)) $raw = ['id' => $id] + $raw;
+        $pk = $model->getKeyName();
 
-            $data = $this->normalizeForModel($raw);
-            $pk = $model->getKeyName();
-            if (!empty($data[$pk])) $model->setAttribute($pk, $data[$pk]);
-            $model->forceFill($data);
-            $model->exists = true;
-            return $model;
-        }, $hits);
+        if (!empty($row[$pk])) {
+            $model->setAttribute($pk, $row[$pk]);
+        }
 
-        return new Collection($models);
+        $model->forceFill($row);
+
+        if (!empty($highlight)) {
+            $model->highlight = $highlight;
+        }
+
+        $model->exists = true;
+
+        return $model;
+    }
+
+    protected function consolidateRawRows(
+        array $rows,
+        string $groupField,
+        string $historyAttribute = 'history',
+        bool $preserveGroupFieldInHistory = true
+    ): array {
+        if (empty($rows)) {
+            return [];
+        }
+
+        $grouped = [];
+
+        foreach ($rows as $row) {
+            $groupValue = $this->resolveRowFieldValue($row, $groupField);
+            $grouped[(string) $groupValue][] = $row;
+        }
+
+        $consolidated = [];
+
+        foreach ($grouped as $groupRows) {
+            $allKeys = [];
+            foreach ($groupRows as $row) {
+                $allKeys = array_merge($allKeys, array_keys($row));
+            }
+            $allKeys = array_values(array_unique($allKeys));
+
+            $common = [];
+            $variableKeys = [];
+
+            foreach ($allKeys as $key) {
+                $values = array_map(
+                    fn (array $row) => array_key_exists($key, $row) ? $row[$key] : null,
+                    $groupRows
+                );
+
+                $serialized = array_map(
+                    fn ($value) => serialize($value),
+                    $values
+                );
+
+                if (count(array_unique($serialized)) === 1) {
+                    $common[$key] = $values[0];
+                } else {
+                    $variableKeys[] = $key;
+                }
+            }
+
+            $history = array_map(function (array $row) use ($variableKeys, $groupField, $preserveGroupFieldInHistory) {
+                $snapshot = [];
+
+                foreach ($variableKeys as $key) {
+                    if (!$preserveGroupFieldInHistory && $this->isSameFieldKey($key, $groupField)) {
+                        continue;
+                    }
+
+                    if (array_key_exists($key, $row)) {
+                        $snapshot[$key] = $row[$key];
+                    }
+                }
+
+                return $snapshot;
+            }, $groupRows);
+
+            $common[$historyAttribute] = array_values($history);
+            $consolidated[] = $common;
+        }
+
+        return $consolidated;
+    }
+
+    protected function normalizeFieldKey(string $key): string
+    {
+        return preg_replace('/[^a-z0-9]/', '', strtolower($key));
+    }
+
+    protected function isSameFieldKey(string $left, string $right): bool
+    {
+        return $this->normalizeFieldKey($left) === $this->normalizeFieldKey($right);
+    }
+
+    protected function resolveRowFieldValue(array $row, string $field): mixed
+    {
+        if (array_key_exists($field, $row)) {
+            return $row[$field];
+        }
+
+        $target = $this->normalizeFieldKey($field);
+
+        foreach ($row as $key => $value) {
+            if (!is_string($key)) {
+                continue;
+            }
+
+            if ($this->normalizeFieldKey($key) === $target) {
+                return $value;
+            }
+        }
+
+        return null;
     }
 
     private function buildFieldMap(array $sourceKeys): array
     {
+        $cacheKey = $this->fieldMapCacheKey($sourceKeys);
+
+        if (isset($this->fieldMapCache[$cacheKey])) {
+            return $this->fieldMapCache[$cacheKey];
+        }
+
         $declaredMap = [];
         $model = $this->model;
         if (property_exists($model, 'manticoreAttributeMap') && is_array($model->manticoreAttributeMap)) {
@@ -166,8 +417,8 @@ abstract class ManticoreBuilderAbstract
             $sourceKeyIndex[strtolower($k)] = $k;
         }
 
-        $candidates = array_unique(array_merge([$model->getKeyName()], $model->getFillable()));
-
+        $candidates = $this->modelAttributeCandidates();
+    
         $variants = function (string $name): array {
             $o = $name;
             $l = strtolower($name);
@@ -202,7 +453,30 @@ abstract class ManticoreBuilderAbstract
             $map[$sourceKeyIndex['id']] = $pk;
         }
 
-        return $map;
+        return $this->fieldMapCache[$cacheKey] = $map;
+    }
+
+    private function fieldMapCacheKey(array $sourceKeys): string
+    {
+        $normalized = array_map('strtolower', $sourceKeys);
+        sort($normalized);
+
+        return implode('|', $normalized);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function modelAttributeCandidates(): array
+    {
+        if ($this->modelAttributeCandidates !== null) {
+            return $this->modelAttributeCandidates;
+        }
+
+        return $this->modelAttributeCandidates = array_values(array_unique(array_merge(
+            [$this->model->getKeyName()],
+            $this->model->getFillable()
+        )));
     }
 
     private function normalizeForModel(array $source): array
@@ -242,17 +516,53 @@ abstract class ManticoreBuilderAbstract
         return $out;
     }
 
-    private function getID($hit)
+    private function getID(mixed $hit, array $raw = []): mixed
     {
+        if (array_key_exists('_id', $raw)) {
+            return $raw['_id'];
+        }
+
+        if (array_key_exists('id', $raw)) {
+            return $raw['id'];
+        }
+
         if (is_array($hit) && array_key_exists('_id', $hit)) {
             return $hit['_id'];
-        } elseif (!is_array($hit) && method_exists($hit, 'getId')) {
-            return $hit->getId();
-        } elseif (!is_array($hit) && property_exists($hit, 'id')) {
-            return $hit->id;
-        } elseif (array_key_exists('id', $hit)) {
+        }
+
+        if (is_array($hit) && array_key_exists('id', $hit)) {
             return $hit['id'];
         }
+
+        if (!is_array($hit) && method_exists($hit, 'getData')) {
+            try {
+                $data = $hit->getData();
+
+                if (is_array($data)) {
+                    if (array_key_exists('_id', $data)) {
+                        return $data['_id'];
+                    }
+
+                    if (array_key_exists('id', $data)) {
+                        return $data['id'];
+                    }
+                }
+            } catch (\Throwable $e) {
+            }
+        }
+
+        if (!is_array($hit) && property_exists($hit, 'id')) {
+            return $hit->id;
+        }
+
+        if (!is_array($hit) && method_exists($hit, 'getId')) {
+            try {
+                return $hit->getId();
+            } catch (\Throwable $e) {
+                return null;
+            }
+        }
+
         return null;
     }
 
@@ -370,7 +680,10 @@ abstract class ManticoreBuilderAbstract
 
     protected function buildWhereClause(): string
     {
-        $clause = ManticoreQueryCompile::toSqlWhereClause($this->must, $this->should, $this->mustNot, $this->match);
+        $clause = ManticoreQueryCompile::toSqlWhereClauseFromSequence(
+            $this->whereSequence,
+            $this->match
+        );
         return $clause ? "WHERE {$clause}" : '';
     }
 
@@ -388,7 +701,7 @@ abstract class ManticoreBuilderAbstract
         $orders = [];
         foreach ($this->sort as $s) {
             foreach ($s as $field => $dir) {
-                $orders[] = "`{$field}` " . strtoupper($dir);
+                $orders[] = ManticoreQueryCompile::compileFieldReference($field) . ' ' . strtoupper($dir);
             }
         }
 
@@ -400,24 +713,47 @@ abstract class ManticoreBuilderAbstract
         return !empty($this->having) ? 'HAVING ' . implode(' AND ', $this->having) : '';
     }
 
-  private function buildOptionClause(): string
+    private function buildOptionClause(): string
     {
-        $defaultMaxMatches = config('manticore.max_matches', 1000);
-        $maxMatches = $this->maxMatches ?? $defaultMaxMatches;
-        $clauses = [];
-        $clauses[] = "max_matches={$maxMatches}";
+        $maxMatches = $this->option['max_matches']
+            ?? $this->resolveConnectionConfig()['max_matches'];
+
+        $clauses = ["max_matches={$maxMatches}"];
 
         foreach ($this->option as $key => $value) {
-            if ($value !== null) {
-                if (is_bool($value)) {
-                    $value = $value ? '1' : '0';
-                }
-
-                $clauses[] = "{$key}={$value}";
+            if ($key === 'max_matches' || $value === null) {
+                continue;
             }
+
+            $clauses[] = "{$key}=" . $this->formatOptionValue($value);
         }
 
         return 'OPTION ' . implode(',', $clauses);
+    }
+
+    private function formatOptionValue(mixed $value): string
+    {
+        if (is_bool($value)) {
+            return $value ? '1' : '0';
+        }
+
+        if (is_array($value)) {
+            $isAssoc = array_keys($value) !== range(0, count($value) - 1);
+
+            if ($isAssoc) {
+                $pairs = [];
+
+                foreach ($value as $k => $v) {
+                    $pairs[] = "{$k}={$v}";
+                }
+
+                return '(' . implode(',', $pairs) . ')';
+            }
+
+            return '(' . implode(',', $value) . ')';
+        }
+
+        return (string) $value;
     }
 
     protected function buildLimitClause(): string
@@ -426,7 +762,7 @@ abstract class ManticoreBuilderAbstract
         $offset = isset($this->offset) ? $this->offset : null;
 
         if ($limit !== null && $offset !== null) {
-            return "LIMIT {$limit}, {$offset}";
+            return "LIMIT {$offset}, {$limit}";
         }
 
         if ($limit !== null) {
