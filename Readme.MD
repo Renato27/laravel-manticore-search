@@ -1,37 +1,37 @@
 # Laravel Manticore Search
 
-Driver para integrar **Manticore Search** ao Laravel com API fluente, hidratação em modelos Eloquent, paginação robusta e suporte a múltiplas conexões.
+A driver for integrating **Manticore Search** with Laravel, featuring a fluent API, Eloquent model hydration, robust pagination, and support for multiple connections.
 
-## O que esta library faz
+## What this library does
 
-- Expõe um query builder fluente via `Model::manticore()`.
-- Permite busca full-text (`match`) + filtros (`where`, `whereIn`, `whereBetween`, etc.).
-- Suporta modo SQL (`select`, `groupBy`, `having`, `orderBy`, `toSql`, `rawQuery`).
-- Hidrata resultados em instâncias do seu Model (com cast e mapeamento de atributos).
-- Preserva filtros da requisição na paginação, inclusive payloads grandes via token de contexto em cache.
-- Oferece fachada opcional (`Manticore::...`) para acesso ao manager/cliente/tabela.
+- Exposes a fluent query builder through `Model::manticore()`.
+- Supports full-text search (`match`) plus filters (`where`, `whereIn`, `whereBetween`, etc.).
+- Supports SQL mode (`select`, `groupBy`, `having`, `orderBy`, `toSql`, `rawQuery`).
+- Hydrates results into your Model instances (including casting and attribute mapping).
+- Preserves request filters during pagination, including large payloads via a cached context token.
+- Provides an optional facade (`Manticore::...`) for manager/client/table access.
 
-## Requisitos
+## Requirements
 
 - PHP `^8.0`
 - Laravel `^10|^11|^12|^13`
 - `manticoresoftware/manticoresearch-php ^4.0`
 
-## Instalação
+## Installation
 
 ```bash
 composer require renatomaldonado/manticore-laravel-search
 ```
 
-## Configuração
+## Configuration
 
-Publique o arquivo de configuração:
+Publish the configuration file:
 
 ```bash
 php artisan vendor:publish --provider="ManticoreLaravel\ManticoreServiceProvider"
 ```
 
-### Estrutura recomendada (múltiplas conexões)
+### Recommended structure (multiple connections)
 
 ```php
 return [
@@ -58,14 +58,14 @@ return [
 ];
 ```
 
-### Compatibilidade legada
+### Legacy compatibility
 
-A library mantém fallback para configuração “flat” (`manticore.host`, `manticore.port`, etc.).
-Se `connections` estiver vazio/ausente, o resolver usa esse formato legado.
+The library keeps a fallback for the “flat” configuration format (`manticore.host`, `manticore.port`, etc.).
+If `connections` is empty or missing, the resolver uses this legacy format.
 
-## Uso no Model
+## Model usage
 
-Use a trait `HasManticoreSearch` e implemente `searchableAs()`.
+Use the `HasManticoreSearch` trait and implement `searchableAs()`.
 
 ```php
 use Illuminate\Database\Eloquent\Model;
@@ -88,9 +88,9 @@ class Company extends Model
 }
 ```
 
-> Se o model usar a trait e não implementar `searchableAs()`, uma `RuntimeException` é lançada.
+> If the model uses the trait and does not implement `searchableAs()`, a `RuntimeException` is thrown.
 
-## Exemplo rápido
+## Quick example
 
 ```php
 $results = Company::manticore()
@@ -101,9 +101,9 @@ $results = Company::manticore()
     ->get();
 ```
 
-## API pública do Builder
+## Builder public API
 
-### Construção de consulta
+### Query building
 
 - `match(string $keywords, ?string $field = null, string $boolean = 'AND')`
 - `where(string $field, mixed $operatorOrValue, mixed $value = null)`
@@ -125,14 +125,14 @@ $results = Company::manticore()
 - `with(array|string ...$relations)`
 - `when($condition, callable $callback, ?callable $default = null)`
 
-### Contexto de execução
+### Execution context
 
-- `usingConnection(string $name)` → escolhe conexão nomeada.
-- `useIndex(array|string $indexes)` → sobrescreve índice(s) do `searchableAs()`.
-- `rawQuery(string $raw, bool $rawMode = false)` → executa SQL manual.
-- `toSql()` → inspeciona SQL gerado.
+- `usingConnection(string $name)` → selects a named connection.
+- `useIndex(array|string $indexes)` → overrides the index(es) returned by `searchableAs()`.
+- `rawQuery(string $raw, bool $rawMode = false)` → executes manual SQL.
+- `toSql()` → inspects the generated SQL.
 
-### Execução e retorno
+### Execution and return values
 
 - `get()`
 - `first()`
@@ -142,31 +142,31 @@ $results = Company::manticore()
 - `toArray()`
 - `toJson(int $options = 0)`
 - `paginate(int $perPage = 15, string $pageName = 'page', ?int $page = null)`
-- `getFacets()` (não suportado em `rawQuery`)
+- `getFacets()` (not supported in `rawQuery`)
 
-### Consolidação (deduplicação por chave)
+### Consolidation (deduplication by key)
 
 - `consolidateBy(string $groupField, string $historyAttribute = 'history', bool $preserveGroupFieldInHistory = true)`
-  - Retorna **um** item consolidado.
+  - Returns **one** consolidated item.
 - `consolidateAllBy(string $groupField, string $historyAttribute = 'history', bool $preserveGroupFieldInHistory = true)`
-  - Retorna **coleção** consolidada.
+  - Returns a consolidated **collection**.
 - `getConsolidatedBy(...)`
-  - Alias de `consolidateAllBy`.
+  - Alias for `consolidateAllBy`.
 - `paginateConsolidatedBy(string $groupField, int $perPage = 15, string $pageName = 'page', ?int $page = null, ...)`
-  - Pagina resultados já consolidados.
+  - Paginates results that have already been consolidated.
 
-## Paginação e preservação de filtros
+## Pagination and filter preservation
 
-`paginate()` e `paginateConsolidatedBy()` preservam automaticamente os filtros da requisição atual:
+`paginate()` and `paginateConsolidatedBy()` automatically preserve filters from the current request:
 
 - GET query params
-- payloads POST/JSON
-- nomes de página customizados (`pageName`)
-- variações de caixa em chave de página (`Page`, `page`)
+- POST/JSON payloads
+- custom page names (`pageName`)
+- case variations in the page key (`Page`, `page`)
 
-Quando o query string fica grande, a library salva os filtros em cache e usa token curto (`_mctx`) no link.
+When the query string becomes too large, the library stores the filters in cache and uses a short token (`_mctx`) in the link.
 
-Para recuperar o payload completo em requisições seguintes:
+To recover the full payload in subsequent requests:
 
 ```php
 use ManticoreLaravel\Builder\ManticoreBuilder;
@@ -174,7 +174,7 @@ use ManticoreLaravel\Builder\ManticoreBuilder;
 $input = ManticoreBuilder::resolvePaginationInputFromRequest('page');
 ```
 
-Config relevante (`config/manticore.php`):
+Relevant config (`config/manticore.php`):
 
 - `pagination.context_key`
 - `pagination.max_query_length`
@@ -182,7 +182,7 @@ Config relevante (`config/manticore.php`):
 - `pagination.cache_prefix`
 - `pagination.total_cache_ttl`
 
-## Facade opcional
+## Optional facade
 
 ```php
 use ManticoreLaravel\Facades\Manticore;
@@ -195,7 +195,7 @@ $names  = Manticore::connectionNames();
 Manticore::forgetClient('default');
 ```
 
-## Exemplos práticos
+## Practical examples
 
 ### SQL mode (select + group + having)
 
@@ -231,7 +231,7 @@ $facets = Company::manticore()
     ->getFacets();
 ```
 
-### Eager load após hidratação
+### Eager loading after hydration
 
 ```php
 $rows = Company::manticore()
@@ -241,28 +241,28 @@ $rows = Company::manticore()
     ->get();
 ```
 
-## Notas importantes
+## Important notes
 
-- `max_matches` sempre entra no `OPTION` do SQL (valor da conexão ou override por método).
-- `usingConnection()` invalida cache local de cliente/config no builder para evitar estado incorreto.
-- `useIndex()` invalida cache do índice resolvido no builder.
-- A biblioteca inclui clientes/respostas “UTF-8 safe” para tratar respostas com encoding inválido.
+- `max_matches` is always included in the SQL `OPTION` clause (connection value or method override).
+- `usingConnection()` invalidates the builder's local client/config cache to avoid incorrect state.
+- `useIndex()` invalidates the builder's resolved index cache.
+- The library includes “UTF-8 safe” clients/responses to handle responses with invalid encoding.
 
-## Testes
+## Tests
 
-Rodar testes de feature (sem servidor Manticore):
+Run feature tests (without a Manticore server):
 
 ```bash
 ./vendor/bin/pest tests/Feature
 ```
 
-Rodar unit test do resolver (sem servidor):
+Run the resolver unit test (without a server):
 
 ```bash
 ./vendor/bin/phpunit tests/ManticoreConnectionResolverTest.php
 ```
 
-Rodar integração do builder (requer Manticore com índice de teste):
+Run builder integration tests (requires Manticore with a test index):
 
 ```bash
 ./vendor/bin/phpunit tests/ManticoreBuilderTest.php
