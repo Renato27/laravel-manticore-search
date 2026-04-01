@@ -52,7 +52,7 @@ class ManticoreConnectionResolver
 
         if (!empty($connections)) {
             $defaultName = $this->config->get('manticore.default', 'default');
-
+            
             if (isset($connections[$defaultName])) {
                 return $this->normalizeConnectionConfig($connections[$defaultName], $defaultName);
             }
@@ -76,12 +76,13 @@ class ManticoreConnectionResolver
             'timeout'     => $this->config->get('manticore.timeout',     5),
             'persistent'  => $this->config->get('manticore.persistent',  false),
             'max_matches' => $this->config->get('manticore.max_matches', 1000),
+            'limit_results' => $this->config->get('manticore.limit_results', 10000),
         ];
     }
 
     /**
      * @param  mixed  $config
-     * @return array{host: string, port: int, username: string|null, password: string|null, transport: string, timeout: int, persistent: bool, max_matches: int}
+     * @return array{host: string, port: int, username: string|null, password: string|null, transport: string, timeout: int, persistent: bool, max_matches: int, limit_results: int}
      */
     private function normalizeConnectionConfig(mixed $config, string $connectionName): array
     {
@@ -90,7 +91,7 @@ class ManticoreConnectionResolver
                 "Manticore connection [{$connectionName}] must be configured as an array."
             );
         }
-
+        
         return $this->normalize($config);
     }
 
@@ -109,6 +110,7 @@ class ManticoreConnectionResolver
             'timeout'     => (int) ($config['timeout']        ?? 5),
             'persistent'  => (bool) ($config['persistent']    ?? false),
             'max_matches' => (int) ($config['max_matches']    ?? 1000),
+            'limit_results' => (int) ($config['limit_results'] ?? 10000),
         ];
     }
 
