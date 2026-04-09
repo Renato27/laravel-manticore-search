@@ -95,14 +95,11 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
             return (int) $cachedTotal;
         }
 
-        if ($this->rawQuery) {
-            return 0;
-        }
-
         try {
             $groupField = $this->groupBy[0] ?? null;
 
             if ($groupField) {
+                $groupField = strtolower($groupField);
                 $countBuilder = clone $this;
                 $countBuilder->limit = null;
                 $countBuilder->offset = null;
@@ -112,14 +109,8 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
                 $countBuilder->highlight = false;
                 $countBuilder->scriptFields = [];
 
-                if (!preg_match('/^[A-Za-z0-9_]+$/', $groupField)) {
-                    throw new \InvalidArgumentException(
-                        "Invalid group field identifier: '{$groupField}'"
-                    );
-                }
-
                 $countBuilder->select = ["COUNT(DISTINCT `{$groupField}`) as cc"];
-                $countBuilder->option('max_matches', 1000000);
+                $countBuilder->option('max_matches', 1000);
                 $countBuilder->option('distinct_precision_threshold', 0);
 
                 $sql = $countBuilder->buildSqlQuery();
@@ -134,7 +125,8 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
                 $countBuilder->sort = [];
                 $countBuilder->highlight = false;
                 $countBuilder->scriptFields = [];
-                $countBuilder->option('max_matches', 1000000);
+                $countBuilder->option('max_matches', 1000);
+                $countBuilder->option('distinct_precision_threshold', 0);
 
                 $resultSet = $countBuilder->executeSqlQuery($countBuilder->buildSqlQuery(), true);
                 $total = $countBuilder->extractTotalFromResultSet($resultSet, 0);
@@ -327,7 +319,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 
         $resultSet = $builder->executeSqlQuery($builder->buildSqlQuery(), true);
         $rows = $builder->extractRawRows($resultSet);
-        $total = $builder->extractTotalFromResultSet($resultSet, count($rows));
+        $total = $this->getTotalMatches() ?? $builder->extractTotalFromResultSet($resultSet, count($rows));
 
         $orderedGroupValues = [];
         foreach ($rows as $row) {
@@ -367,7 +359,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
 
         $resultSet = $builder->executeSqlQuery($builder->buildSqlQuery(), true);
         $rows = $builder->extractRawRows($resultSet);
-        $total = $builder->extractTotalFromResultSet($resultSet, count($rows));
+        $total = $this->getTotalMatches() ?? $builder->extractTotalFromResultSet($resultSet, count($rows));
 
         if (empty($rows)) {
             return ['rows' => [], 'total' => $total];
@@ -416,7 +408,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract
                 if ($this->canReuseSourceTotalForConsolidatedFallback($groupField)) {
                     return [
                         'rows' => $rows,
-                        'total' => $this->extractTotalFromResultSet($resultSet, count($rows)),
+                        'total' => $this->getTotalMatches() ?? $this->extractTotalFromResultSet($resultSet, count($rows)),
                     ];
                 }
 
