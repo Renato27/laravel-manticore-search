@@ -12,7 +12,9 @@ class Utf8SafeResponse extends Response
         
         if (!mb_check_encoding($data, 'UTF-8')) {
             $encoding = mb_detect_encoding($data, ['UTF-8', 'ISO-8859-1', 'ISO-8859-15'], true);
-            $data = mb_convert_encoding($data, 'UTF-8', $encoding);
+            if ($encoding !== false) {
+                $data = mb_convert_encoding($data, 'UTF-8', $encoding);
+            }
         }
 
         $data = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/u', '', $data);

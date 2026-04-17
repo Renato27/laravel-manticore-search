@@ -1,6 +1,34 @@
-vendor
+# Dependencies
+/vendor
+
+# Composer
 composer.lock
 composer-setup.php
+
+# Environment
+.env
+.env.*
+
+# PHPUnit / Pest
 .phpunit.result.cache
 .phpunit.cache
+/.phpunit.cache
+
+# Coverage
+/coverage
+
+# IDE / OS
+.DS_Store
+Thumbs.db
 .history
+/.idea
+/.vscode
+*.swp
+*.swo
+
+# Build artefacts
+/build
+/dist
+
+# Logs
+*.log
