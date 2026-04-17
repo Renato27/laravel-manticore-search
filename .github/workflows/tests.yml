@@ -1,0 +1,178 @@
+name: Tests
+
+on:
+  push:
+    branches: [master, main, develop]
+  pull_request:
+    branches: [master, main, develop]
+
+jobs:
+  # ============================================================
+  # Unit Tests — no live Manticore needed
+  # ============================================================
+  unit-tests:
+    name: "Unit Tests | PHP ${{ matrix.php }} | Laravel ${{ matrix.laravel }}"
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.2", "8.3"]
+        laravel: ["^10.0", "^11.0", "^12.0"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mbstring, json, curl
+          coverage: none
+
+      - name: Pin Laravel ${{ matrix.laravel }}
+        run: composer require "laravel/framework:${{ matrix.laravel }}" "orchestra/testbench:*" --no-update --no-interaction
+
+      - name: Install Composer dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Run Unit Tests
+        run: vendor/bin/pest --testsuite=Unit --colors=always
+
+      - name: Run Feature Tests
+        run: vendor/bin/pest --testsuite=Feature --colors=always
+
+  # ============================================================
+  # Integration Tests — spins up Manticore Search
+  # ============================================================
+  integration-tests:
+    name: "Integration Tests | PHP ${{ matrix.php }}"
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ["8.2", "8.3"]
+
+    services:
+      manticore:
+        image: manticoresearch/manticore:latest
+        ports:
+          - 9308:9308
+          - 9306:9306
+        options: >-
+          --health-cmd="true"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=5
+          --health-start-period=10s
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mbstring, json, curl
+          coverage: none
+
+      - name: Install Composer dependencies
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Wait for Manticore to be ready
+        run: |
+          echo "Waiting for Manticore Search HTTP API..."
+          for i in $(seq 1 30); do
+            if curl -sf "http://127.0.0.1:9308/" > /dev/null 2>&1; then
+              echo "Manticore is ready!"
+              exit 0
+            fi
+            echo "Attempt $i/30: not ready yet, waiting 2s..."
+            sleep 2
+          done
+          echo "Manticore failed to become ready after 60s"
+          exit 1
+
+      - name: Seed Manticore with test data
+        run: |
+          # Use HTTP API to create index and seed data
+          curl -s -X POST 'http://127.0.0.1:9308/sql' \
+            -H 'Content-Type: application/json' \
+            -d '{"query": "DROP TABLE IF EXISTS laravel_manticore_test"}'
+
+          curl -s -X POST 'http://127.0.0.1:9308/sql' \
+            -H 'Content-Type: application/json' \
+            -d '{"query": "CREATE TABLE laravel_manticore_test (id bigint, entity_id integer, title text, status string, category string, score integer, created_at timestamp)"}'
+
+          curl -s -X POST 'http://127.0.0.1:9308/sql' \
+            -H 'Content-Type: application/json' \
+            -d '{"query": "INSERT INTO laravel_manticore_test (id, entity_id, title, status, category, score, created_at) VALUES (1, 1, '\''Test document one'\'', '\''active'\'', '\''tech'\'', 100, 1700000000)"}'
+
+          curl -s -X POST 'http://127.0.0.1:9308/sql' \
+            -H 'Content-Type: application/json' \
+            -d '{"query": "INSERT INTO laravel_manticore_test VALUES (2, 1, '\''Test document two'\'', '\''active'\'', '\''tech'\'', 90, 1700000001)"}'
+
+          curl -s -X POST 'http://127.0.0.1:9308/sql' \
+            -H 'Content-Type: application/json' \
+            -d '{"query": "INSERT INTO laravel_manticore_test VALUES (3, 2, '\''Test three'\'', '\''active'\'', '\''science'\'', 80, 1700000002)"}'
+
+          curl -s -X POST 'http://127.0.0.1:9308/sql' \
+            -H 'Content-Type: application/json' \
+            -d '{"query": "INSERT INTO laravel_manticore_test VALUES (4, 2, '\''Test four'\'', '\''pending'\'', '\''science'\'', 70, 1700000003)"}'
+
+          curl -s -X POST 'http://127.0.0.1:9308/sql' \
+            -H 'Content-Type: application/json' \
+            -d '{"query": "INSERT INTO laravel_manticore_test VALUES (5, 3, '\''Test five'\'', '\''active'\'', '\''tech'\'', 60, 1700000004)"}'
+
+          curl -s -X POST 'http://127.0.0.1:9308/sql' \
+            -H 'Content-Type: application/json' \
+            -d '{"query": "INSERT INTO laravel_manticore_test VALUES (6, 3, '\''Test six'\'', '\''inactive'\'', '\''health'\'', 50, 1700000005)"}'
+
+          curl -s -X POST 'http://127.0.0.1:9308/sql' \
+            -H 'Content-Type: application/json' \
+            -d '{"query": "INSERT INTO laravel_manticore_test VALUES (7, 4, '\''Test seven'\'', '\''active'\'', '\''health'\'', 40, 1700000006)"}'
+
+          curl -s -X POST 'http://127.0.0.1:9308/sql' \
+            -H 'Content-Type: application/json' \
+            -d '{"query": "INSERT INTO laravel_manticore_test VALUES (8, 4, '\''Test eight'\'', '\''active'\'', '\''tech'\'', 30, 1700000007)"}'
+
+          curl -s -X POST 'http://127.0.0.1:9308/sql' \
+            -H 'Content-Type: application/json' \
+            -d '{"query": "INSERT INTO laravel_manticore_test VALUES (9, 5, '\''Test nine'\'', '\''pending'\'', '\''science'\'', 20, 1700000008)"}'
+
+          curl -s -X POST 'http://127.0.0.1:9308/sql' \
+            -H 'Content-Type: application/json' \
+            -d '{"query": "INSERT INTO laravel_manticore_test VALUES (10, 5, '\''Test ten'\'', '\''active'\'', '\''tech'\'', 10, 1700000009)"}'
+
+          echo "Test data seeded successfully"
+
+      - name: Run Integration Tests
+        env:
+          MANTICORE_HOST: "127.0.0.1"
+          MANTICORE_PORT: "9308"
+          MANTICORE_TRANSPORT: "Http"
+        run: vendor/bin/pest --testsuite=Integration --colors=always
+
+  # ============================================================
+  # Code Style (optional, non-blocking)
+  # ============================================================
+  code-style:
+    name: Code Style
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP 8.2
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.2"
+          tools: cs2pr
+
+      - name: Install dependencies
+        run: composer update --no-interaction --prefer-dist
+
+      - name: Check PHP syntax
+        run: find src -name "*.php" -print0 | xargs -0 -n1 php -l
