@@ -9,19 +9,6 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 trait HasPagination
 {
-    protected $limit;
-    protected $offset;
-    protected $sort = [];
-    protected $option = [];
-    protected $groupBy = [];
-    protected $having = [];
-    protected $highlight = false;
-    protected $scriptFields = [];
-    protected $select = [];
-    protected $connectionName;
-    protected $rawQueryMode = false;
-    protected $rawQuery;
-
     protected function configuredMaxMatches(): int
     {
         $value = (int) ($this->resolveConnectionConfig()['max_matches'] ?? 1000);
