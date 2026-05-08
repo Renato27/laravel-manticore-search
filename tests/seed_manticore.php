@@ -6,10 +6,11 @@ $base = "http://{$host}:{$port}";
 
 function manticore_sql(string $sql, string $base): void
 {
-    $ch = curl_init("{$base}/sql");
+    // Manticore 6.x restricts /sql to SELECT only; /cli accepts all SQL (DDL + DML).
+    $ch = curl_init("{$base}/cli");
     curl_setopt_array($ch, [
         CURLOPT_POST           => true,
-        CURLOPT_POSTFIELDS     => 'query=' . urlencode($sql),
+        CURLOPT_POSTFIELDS     => $sql,
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_FAILONERROR    => false,
     ]);
@@ -23,9 +24,10 @@ function manticore_sql(string $sql, string $base): void
         exit(1);
     }
 
-    $parsed = json_decode($raw ?: '', true);
+    $parsed   = json_decode($raw ?: '', true);
+    $errorMsg = $parsed['error'] ?? '';
 
-    if (isset($parsed['error']) && !str_contains(strtolower($sql), 'drop table if exists')) {
+    if (!empty($errorMsg) && !str_contains(strtolower($sql), 'drop table if exists')) {
         fwrite(STDERR, "ERROR executing SQL:\n  {$sql}\nResponse:\n  {$raw}\n");
         exit(1);
     }
