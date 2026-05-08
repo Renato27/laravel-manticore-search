@@ -4,11 +4,6 @@ namespace ManticoreLaravel\Builder\Concerns;
 
 use ManticoreLaravel\Builder\Grammar\ManticoreGrammar;
 
-/**
- * Provides SQL query compilation methods for the Manticore builder.
- *
- * Properties referenced here are declared in ManticoreBuilderAbstract.
- */
 trait HasSqlCompilation
 {
     protected function buildSelectClause(): string

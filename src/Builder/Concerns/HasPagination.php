@@ -7,14 +7,21 @@ use Illuminate\Pagination\LengthAwarePaginator;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
-
-/**
- * Provides pagination helpers and context management for the Manticore builder.
- *
- * Properties referenced here are declared in ManticoreBuilderAbstract.
- */
 trait HasPagination
 {
+    protected $limit;
+    protected $offset;
+    protected $sort = [];
+    protected $option = [];
+    protected $groupBy = [];
+    protected $having = [];
+    protected $highlight = false;
+    protected $scriptFields = [];
+    protected $select = [];
+    protected $connectionName;
+    protected $rawQueryMode = false;
+    protected $rawQuery;
+
     protected function configuredMaxMatches(): int
     {
         $value = (int) ($this->resolveConnectionConfig()['max_matches'] ?? 1000);
@@ -37,12 +44,17 @@ trait HasPagination
         $signatureOptions = $signatureBuilder->option;
         unset($signatureOptions['max_matches']);
 
+        $sql = null;
+        if (!$signatureBuilder->rawQuery && method_exists($signatureBuilder, 'buildSqlQuery')) {
+            $sql = $signatureBuilder->buildSqlQuery();
+        }
+
         $signature = [
             'connectionName' => $signatureBuilder->connectionName,
             'index'          => $signatureBuilder->resolveIndexName(),
             'rawQueryMode'   => $signatureBuilder->rawQueryMode,
             'rawQuery'       => $signatureBuilder->rawQuery,
-            'sql'            => $signatureBuilder->rawQuery ? null : $signatureBuilder->buildSqlQuery(),
+            'sql'            => $sql,
             'option'         => $signatureOptions,
         ];
 
@@ -62,10 +74,6 @@ trait HasPagination
         return (int) config('manticore.pagination.total_cache_ttl', 300);
     }
 
-    /**
-     * Execute a count query to get the real total number of matching documents.
-     * Result is cached to avoid re-running on each page load.
-     */
     protected function getTotalMatches(): int
     {
         $cacheKey     = $this->getPaginationCacheKey();
@@ -93,6 +101,9 @@ trait HasPagination
                 $countBuilder->option('max_matches', 1000);
                 $countBuilder->option('distinct_precision_threshold', 0);
 
+                if (!method_exists($countBuilder, 'buildSqlQuery') || !method_exists($countBuilder, 'executeSqlQuery')) {
+                    return 0;
+                }
                 $sql       = $countBuilder->buildSqlQuery();
                 $resultSet = $countBuilder->executeSqlQuery($sql);
                 $rows      = $countBuilder->extractRawRows($resultSet);
@@ -108,6 +119,9 @@ trait HasPagination
                 $countBuilder->option('max_matches', 1000);
                 $countBuilder->option('distinct_precision_threshold', 0);
 
+                if (!method_exists($countBuilder, 'buildSqlQuery') || !method_exists($countBuilder, 'executeSqlQuery')) {
+                    return 0;
+                }
                 $resultSet = $countBuilder->executeSqlQuery($countBuilder->buildSqlQuery());
                 $total     = $countBuilder->extractTotalFromResultSet($resultSet, 0);
             }
@@ -122,6 +136,21 @@ trait HasPagination
 
             return 0;
         }
+    }
+
+    protected function extractRawRows(mixed $resultSet): array
+    {
+        if (!is_object($resultSet) || !method_exists($resultSet, 'getHits')) {
+            return [];
+        }
+
+        $hits = $resultSet->getHits();
+
+        if (is_array($hits)) {
+            return $hits;
+        }
+
+        return [];
     }
 
     protected function extractTotalFromResultSet(mixed $resultSet, int $fallback = 0): int
@@ -185,6 +214,13 @@ trait HasPagination
         return (string) config('manticore.pagination.cache_prefix', 'manticore:pagination:');
     }
 
+    protected function option(string $key, mixed $value): self
+    {
+        $this->option[$key] = $value;
+
+        return $this;
+    }
+
     protected function paginationContextTtlSeconds(): int
     {
         return (int) config('manticore.pagination.context_ttl', 900);
@@ -193,6 +229,11 @@ trait HasPagination
     protected function maxPaginationQueryLength(): int
     {
         return (int) config('manticore.pagination.max_query_length', 1500);
+    }
+
+    protected function resolveIndexName(): string
+    {
+        return '';
     }
 
     protected function paginationContextCacheKey(string $contextId): string

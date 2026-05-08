@@ -6,14 +6,6 @@ use Illuminate\Contracts\Config\Repository as ConfigRepository;
 use ManticoreLaravel\Contracts\ConnectionResolverContract;
 use ManticoreLaravel\Exceptions\ManticoreConnectionException;
 
-/**
- * Resolves the active Manticore connection configuration.
- *
- * Supports three config shapes:
- *   1. Legacy flat keys (manticore.host, manticore.port, …)
- *   2. Named connections under manticore.connections.*
- *   3. Mixed (named connections with legacy fallback)
- */
 class ManticoreConnectionResolver implements ConnectionResolverContract
 {
     public function __construct(protected ConfigRepository $config) {}
@@ -32,7 +24,7 @@ class ManticoreConnectionResolver implements ConnectionResolverContract
      * Resolve the connection configuration array.
      *
      * @param  string|null  $connection
-     * @return array{host: string, port: int, username: string|null, password: string|null, transport: string, timeout: int, persistent: bool, max_matches: int, limit_results: int}
+     * @return array
      *
      * @throws ManticoreConnectionException
      */
@@ -47,16 +39,13 @@ class ManticoreConnectionResolver implements ConnectionResolverContract
                 return $this->normalizeConnectionConfig($connections[$connection], $connection);
             }
 
-            // No named connections at all — fall back to legacy flat config
             if ($connections === []) {
                 return $this->normalizeConnectionConfig($this->resolveLegacyConfig(), 'legacy');
             }
 
-            // Named connections exist but the requested one is missing
             throw ManticoreConnectionException::connectionNotFound($connection, array_keys($connections));
         }
 
-        // No explicit connection — use the default
         if (!empty($connections)) {
             $defaultName = $this->config->get('manticore.default', 'default');
 
@@ -65,7 +54,6 @@ class ManticoreConnectionResolver implements ConnectionResolverContract
             }
         }
 
-        // Final fallback: legacy flat config
         return $this->normalizeConnectionConfig($this->resolveLegacyConfig(), 'legacy');
     }
 

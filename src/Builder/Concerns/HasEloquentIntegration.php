@@ -4,11 +4,6 @@ namespace ManticoreLaravel\Builder\Concerns;
 
 use Illuminate\Database\Eloquent\Collection;
 
-/**
- * Handles eager loading of Eloquent relations on Manticore result sets.
- *
- * Properties referenced here are declared in ManticoreBuilderAbstract.
- */
 trait HasEloquentIntegration
 {
     protected function applyEloquentWith(Collection $items): Collection

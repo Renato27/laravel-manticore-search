@@ -29,7 +29,6 @@ it('consolidateAllBy adds history attribute', function () {
     $results = consolidationBuilder()->limit(20)->consolidateAllBy('entity_id');
 
     foreach ($results as $result) {
-        // Each result should have a history attribute (it's set on the model)
         expect($result)->not->toBeNull();
     }
 })->group('integration');

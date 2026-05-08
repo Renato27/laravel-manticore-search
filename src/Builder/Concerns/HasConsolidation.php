@@ -2,11 +2,6 @@
 
 namespace ManticoreLaravel\Builder\Concerns;
 
-/**
- * Provides row consolidation (group-merge) utilities for the Manticore builder.
- *
- * Properties referenced here are declared in ManticoreBuilderAbstract.
- */
 trait HasConsolidation
 {
     /**
@@ -28,7 +23,6 @@ trait HasConsolidation
             return [];
         }
 
-        /** @var array<string, array<int, array>> $grouped */
         $grouped = [];
 
         foreach ($rows as $row) {

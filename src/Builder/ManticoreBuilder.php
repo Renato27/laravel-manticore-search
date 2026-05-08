@@ -11,9 +11,6 @@ use ManticoreLaravel\Contracts\ManticoreBuilderContract;
 
 class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract implements ManticoreBuilderContract
 {
-    // =========================================================================
-    // Constraint / filter methods
-    // =========================================================================
 
     /**
      * Add a full-text MATCH condition.
@@ -957,7 +954,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract implements Man
     // Collection helpers
     // =========================================================================
 
-    public function pluck(string $field): Collection
+    public function pluck(string $field): SupportCollection
     {
         return $this->get()->pluck($field);
     }

@@ -3,14 +3,8 @@
 namespace ManticoreLaravel\Builder\Concerns;
 
 use Manticoresearch\Query\Equals;
-use Manticoresearch\Query\In;
 use Manticoresearch\Query\Range;
 
-/**
- * Provides where/filter constraint methods for the Manticore builder.
- *
- * Properties referenced here are declared in ManticoreBuilderAbstract.
- */
 trait HasQueryConstraints
 {
     /**
@@ -49,7 +43,6 @@ trait HasQueryConstraints
         }
 
         if ($boolean === 'or') {
-            // Promote last AND condition to should on first OR call
             if (!empty($this->must) && empty($this->should)) {
                 $this->should[] = array_pop($this->must);
             }

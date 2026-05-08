@@ -5,11 +5,6 @@ namespace ManticoreLaravel\Builder\Concerns;
 use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Collection;
 
-/**
- * Handles extraction and hydration of Manticore result sets into Eloquent models.
- *
- * Properties referenced here are declared in ManticoreBuilderAbstract.
- */
 trait HasResultHydration
 {
     /**

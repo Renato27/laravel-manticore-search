@@ -4,16 +4,12 @@ namespace ManticoreLaravel\Support;
 
 use ManticoreLaravel\Builder\Utils\Utf8SafeClient;
 
-/**
- * Creates Manticore client instances from a normalized connection config array.
- *
- */
 class ManticoreClientFactory
 {
     /**
      * Build a Utf8SafeClient from a resolved connection config array.
      *
-     * @param  array{host: string, port: int, username: string|null, password: string|null, transport: string, timeout: int, persistent: bool}  $config
+     * @param  array
      */
     public function make(array $config): Utf8SafeClient
     {
@@ -31,7 +27,7 @@ class ManticoreClientFactory
     /**
      * Build a deterministic cache key for a normalized connection config.
      *
-     * @param  array{host: string, port: int, username: string|null, password: string|null, transport: string, timeout: int, persistent: bool}  $config
+     * @param  array
      */
     public function cacheKey(array $config): string
     {

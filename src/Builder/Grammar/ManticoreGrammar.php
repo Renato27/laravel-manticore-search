@@ -2,9 +2,6 @@
 
 namespace ManticoreLaravel\Builder\Grammar;
 
-/**
- * Compiles Manticore query conditions and structures into SQL fragments.
- */
 final class ManticoreGrammar
 {
     /**

@@ -1,11 +1,5 @@
 <?php
 
-/**
- * Manticore Search test data seeder.
- * Used by the GitHub Actions integration-tests job.
- * Avoids shell quoting issues by using PHP's json_encode for the HTTP payload.
- */
-
 $host = getenv('MANTICORE_HOST') ?: '127.0.0.1';
 $port = getenv('MANTICORE_PORT') ?: '9308';
 $base = "http://{$host}:{$port}";
@@ -27,7 +21,6 @@ function manticore_sql(string $sql, string $base): void
     $raw    = file_get_contents("{$base}/sql", false, $ctx);
     $parsed = json_decode($raw, true);
 
-    // DROP TABLE IF EXISTS may return "unknown index" on a clean environment — that is fine.
     if (isset($parsed['error']) && !str_contains(strtolower($sql), 'drop table if exists')) {
         fwrite(STDERR, "ERROR executing SQL:\n  {$sql}\nResponse:\n  {$raw}\n");
         exit(1);
