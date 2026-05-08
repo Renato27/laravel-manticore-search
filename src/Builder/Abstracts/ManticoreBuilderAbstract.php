@@ -19,10 +19,11 @@ abstract class ManticoreBuilderAbstract
 {
     use HasQueryConstraints;
     use HasSqlCompilation;
-    use HasResultHydration;
     use HasEloquentIntegration;
     use HasConsolidation;
-    use HasPagination;
+    use HasResultHydration, HasPagination {
+        HasResultHydration::extractRawRows insteadof HasPagination;
+    }
 
     // -------------------------------------------------------------------------
     // Query state

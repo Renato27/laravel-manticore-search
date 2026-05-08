@@ -6,20 +6,24 @@ $base = "http://{$host}:{$port}";
 
 function manticore_sql(string $sql, string $base): void
 {
-    $payload = json_encode(['query' => $sql]);
+    $ch = curl_init("{$base}/sql");
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => 'query=' . urlencode($sql),
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_FAILONERROR    => false,
+    ]);
 
-    $opts = [
-        'http' => [
-            'method'        => 'POST',
-            'header'        => "Content-Type: application/json\r\n",
-            'content'       => $payload,
-            'ignore_errors' => true,
-        ],
-    ];
+    $raw   = curl_exec($ch);
+    $errno = curl_errno($ch);
+    curl_close($ch);
 
-    $ctx    = stream_context_create($opts);
-    $raw    = file_get_contents("{$base}/sql", false, $ctx);
-    $parsed = json_decode($raw, true);
+    if ($errno !== 0) {
+        fwrite(STDERR, "CURL error ({$errno}) for: {$sql}\n");
+        exit(1);
+    }
+
+    $parsed = json_decode($raw ?: '', true);
 
     if (isset($parsed['error']) && !str_contains(strtolower($sql), 'drop table if exists')) {
         fwrite(STDERR, "ERROR executing SQL:\n  {$sql}\nResponse:\n  {$raw}\n");

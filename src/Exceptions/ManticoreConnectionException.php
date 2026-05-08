@@ -2,7 +2,7 @@
 
 namespace ManticoreLaravel\Exceptions;
 
-class ManticoreConnectionException extends \RuntimeException
+class ManticoreConnectionException extends \InvalidArgumentException
 {
     public static function connectionNotFound(string $connection, array $available = []): static
     {

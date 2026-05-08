@@ -52,6 +52,11 @@ class FakePaginationFilterFlowBuilder extends ManticoreBuilder
     {
         return $this->rows;
     }
+
+    protected function canUseOptimizedConsolidatedPagination(): bool
+    {
+        return false;
+    }
 }
 
 class FakeWindowLimitedPaginationBuilder extends ManticoreBuilder
@@ -70,6 +75,11 @@ class FakeWindowLimitedPaginationBuilder extends ManticoreBuilder
         $window = $this->limit ?? 20;
 
         return array_slice($this->rows, 0, $window);
+    }
+
+    protected function canUseOptimizedConsolidatedPagination(): bool
+    {
+        return false;
     }
 }
 
@@ -494,7 +504,7 @@ it('uses wildcard field when match receives only keywords', function () {
         ->limit(10)
         ->sqlPublic();
 
-    expect($sql)->toContain("MATCH('@* nos')");
+    expect($sql)->toContain("MATCH('(@* (nos))')");
 });
 
 it('keeps real total when paginating sql mode with select group by and order by', function () {
