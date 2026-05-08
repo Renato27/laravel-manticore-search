@@ -53,19 +53,31 @@ class FakePaginationFilterFlowBuilder extends ManticoreBuilder
         return $this->rows;
     }
 
-    protected function canUseOptimizedConsolidatedPagination(): bool
-    {
-        return false;
-    }
-
     protected function executeSqlQuery(string $sql, ?bool $rawMode = null): mixed
     {
         $allRows = $this->rows;
-        $limit   = $this->limit ?? count($allRows);
-        $offset  = $this->offset ?? 0;
-        $sliced  = array_slice($allRows, $offset, $limit);
 
-        return new FakeSqlResultSet($sliced, count($allRows));
+        if (!empty($this->groupBy)) {
+            $groupField = $this->groupBy[0];
+            $seen    = [];
+            $deduped = [];
+            foreach ($allRows as $row) {
+                $val = $this->resolveRowFieldValue($row, $groupField);
+                $key = (string) $val;
+                if (!isset($seen[$key])) {
+                    $seen[$key] = true;
+                    $deduped[]  = [$groupField => $val];
+                }
+            }
+            $allRows = $deduped;
+        }
+
+        $total  = count($allRows);
+        $limit  = $this->limit ?? $total;
+        $offset = $this->offset ?? 0;
+        $sliced = array_slice($allRows, $offset, $limit);
+
+        return new FakeSqlResultSet($sliced, $total);
     }
 
     protected function fetchConsolidatedHistoryRows(string $groupField, array $groupValues): array
@@ -99,18 +111,30 @@ class FakeWindowLimitedPaginationBuilder extends ManticoreBuilder
         return array_slice($this->rows, 0, $window);
     }
 
-    protected function canUseOptimizedConsolidatedPagination(): bool
-    {
-        return false;
-    }
-
     protected function executeSqlQuery(string $sql, ?bool $rawMode = null): mixed
     {
         $allRows = $this->rows;
-        $total   = count($allRows);
-        $limit   = $this->limit ?? $total;
-        $offset  = $this->offset ?? 0;
-        $sliced  = array_slice($allRows, $offset, $limit);
+
+        // Simulate GROUP BY: deduplicate rows by the group field
+        if (!empty($this->groupBy)) {
+            $groupField = $this->groupBy[0];
+            $seen    = [];
+            $deduped = [];
+            foreach ($allRows as $row) {
+                $val = $this->resolveRowFieldValue($row, $groupField);
+                $key = (string) $val;
+                if (!isset($seen[$key])) {
+                    $seen[$key] = true;
+                    $deduped[]  = [$groupField => $val];
+                }
+            }
+            $allRows = $deduped;
+        }
+
+        $total  = count($allRows);
+        $limit  = $this->limit ?? $total;
+        $offset = $this->offset ?? 0;
+        $sliced = array_slice($allRows, $offset, $limit);
 
         return new FakeSqlResultSet($sliced, $total);
     }
