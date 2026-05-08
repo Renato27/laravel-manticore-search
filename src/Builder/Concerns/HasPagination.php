@@ -94,7 +94,9 @@ trait HasPagination
                 $sql       = $countBuilder->buildSqlQuery();
                 $resultSet = $countBuilder->executeSqlQuery($sql);
                 $rows      = $countBuilder->extractRawRows($resultSet);
-                $total     = (int) ($rows[0]['cc'] ?? 0);
+                $total     = isset($rows[0]['cc'])
+                    ? (int) $rows[0]['cc']
+                    : $countBuilder->extractTotalFromResultSet($resultSet, 0);
             } else {
                 $countBuilder = clone $this;
 
