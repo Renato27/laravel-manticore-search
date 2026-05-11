@@ -5,12 +5,6 @@ namespace ManticoreLaravel\Support;
 use Manticoresearch\Client;
 use Manticoresearch\Table;
 
-/**
- * Central orchestration point for resolved connection configuration and client instances.
- *
- * This keeps config resolution and client lifecycle concerns out of query builders while
- * preserving backward-compatible runtime behavior.
- */
 class ManticoreManager
 {
     /**
@@ -27,7 +21,7 @@ class ManticoreManager
      * Resolve a normalized connection config.
      *
      * @param  string|null  $connection
-     * @return array{host: string, port: int, username: string|null, password: string|null, transport: string, timeout: int, persistent: bool, max_matches: int}
+     * @return array
      */
     public function resolveConfig(?string $connection = null): array
     {
