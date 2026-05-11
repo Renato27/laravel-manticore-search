@@ -33,16 +33,16 @@ it('paginate has a non-negative total', function () {
 })->group('integration');
 
 it('paginate with page 2 returns different results than page 1', function () {
-    $page1 = paginationBuilder()->paginate(3, 'page', 1);
-    $page2 = paginationBuilder()->paginate(3, 'page', 2);
+    $page1 = paginationBuilder()->orderBy('id')->paginate(3, 'page', 1);
+    $page2 = paginationBuilder()->orderBy('id')->paginate(3, 'page', 2);
 
-    if ($page1->count() >= 3 && $page2->count() > 0) {
-        $ids1 = $page1->pluck('id')->toArray();
-        $ids2 = $page2->pluck('id')->toArray();
-        expect(array_intersect($ids1, $ids2))->toBeEmpty();
-    }
+    $ids1 = $page1->pluck('id')->toArray();
+    $ids2 = $page2->pluck('id')->toArray();
 
-    expect(true)->toBeTrue();
+
+    expect($ids1)->not->toBeEmpty();
+    expect($ids2)->not->toBeEmpty();
+    expect(array_intersect($ids1, $ids2))->toBeEmpty();
 })->group('integration');
 
 it('paginate with explicit max_matches overrides default', function () {
