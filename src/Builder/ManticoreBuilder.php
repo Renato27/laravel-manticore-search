@@ -566,11 +566,7 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract implements Man
         } else {
             $total = $this->getTotalMatches();
 
-            if ($this->usesSqlQueryMode()) {
-                $resultSet = $this->executeSqlQuery($this->buildSqlQuery());
-            } else {
-                $resultSet = $this->search()->get();
-            }
+            $resultSet = $this->executeSqlQuery($this->buildSqlQuery());
 
             $rows    = $this->extractRawRows($resultSet);
             $results = $this->applyEloquentWith($this->hydrateModelsFromRows($rows));

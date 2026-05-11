@@ -74,7 +74,16 @@ trait HasResultHydration
         }
 
         if (!array_is_list($results)) {
-            return [];
+            $rows = [];
+            foreach ($results as $id => $row) {
+                if (is_array($row)) {
+                    if (!array_key_exists('id', $row)) {
+                        $row = ['id' => $id] + $row;
+                    }
+                    $rows[] = $this->normalizeForModel($row);
+                }
+            }
+            return $rows;
         }
 
         return array_map(function ($row) {
