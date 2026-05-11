@@ -560,6 +560,10 @@ class ManticoreBuilder extends Abstracts\ManticoreBuilderAbstract implements Man
 
         $this->limit($perPage)->offset($offset);
 
+        if (empty($this->sort) && !$this->rawQuery) {
+            $this->sort[] = ['id' => 'asc'];
+        }
+
         if ($this->rawQuery) {
             $results = $this->fetchRawQuery();
             $total   = $results->count();

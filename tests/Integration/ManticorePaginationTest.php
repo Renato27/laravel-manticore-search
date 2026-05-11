@@ -33,8 +33,8 @@ it('paginate has a non-negative total', function () {
 })->group('integration');
 
 it('paginate with page 2 returns different results than page 1', function () {
-    $page1 = paginationBuilder()->orderBy('id')->paginate(3, 'page', 1);
-    $page2 = paginationBuilder()->orderBy('id')->paginate(3, 'page', 2);
+    $page1 = paginationBuilder()->paginate(3, 'page', 1);
+    $page2 = paginationBuilder()->paginate(3, 'page', 2);
 
     $ids1 = $page1->pluck('id')->toArray();
     $ids2 = $page2->pluck('id')->toArray();
