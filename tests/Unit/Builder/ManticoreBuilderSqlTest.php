@@ -186,13 +186,13 @@ it('generates LIMIT clause', function () {
 
 it('generates LIMIT with offset', function () {
     $sql = buildSql(makeBuilder()->limit(10)->offset(20));
-    expect($sql)->toContain('LIMIT 20, 10');
+    expect($sql)->toContain('LIMIT 10 OFFSET 20');
 });
 
 it('forPage sets correct limit and offset', function () {
     $builder = makeBuilder()->forPage(3, 10);
     $sql = buildSql($builder);
-    expect($sql)->toContain('LIMIT 20, 10');
+    expect($sql)->toContain('LIMIT 10 OFFSET 20');
 });
 
 // ---------------------------------------------------------------------------

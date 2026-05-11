@@ -594,7 +594,7 @@ it('builds sql limit as offset then limit', function () {
         ->limit(10)
         ->sqlPublic();
 
-    expect($sql)->toContain('LIMIT 20, 10');
+    expect($sql)->toContain('LIMIT 10 OFFSET 20');
 });
 
 it('uses wildcard field when match receives only keywords', function () {

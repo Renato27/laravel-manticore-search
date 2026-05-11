@@ -58,7 +58,7 @@ trait HasSqlCompilation
         $offset = $this->offset;
 
         if ($limit !== null && $offset !== null) {
-            return "LIMIT {$offset}, {$limit}";
+            return "LIMIT {$limit} OFFSET {$offset}";
         }
 
         if ($limit !== null) {
