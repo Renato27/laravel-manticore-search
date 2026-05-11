@@ -11,6 +11,7 @@ class Utf8SafeSearch extends Search
     public function get(): ResultSet
     {
         $this->body = $this->compile();
+
         $endpoint = new EndpointsSearch(['body' => $this->body]);
 
         $resp = $this->client->request($endpoint, [

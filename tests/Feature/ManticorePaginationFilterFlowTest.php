@@ -52,6 +52,45 @@ class FakePaginationFilterFlowBuilder extends ManticoreBuilder
     {
         return $this->rows;
     }
+
+    protected function executeSqlQuery(string $sql, ?bool $rawMode = null): mixed
+    {
+        $allRows = $this->rows;
+
+        if (!empty($this->groupBy)) {
+            $groupField = $this->groupBy[0];
+            $seen    = [];
+            $deduped = [];
+            foreach ($allRows as $row) {
+                $val = $this->resolveRowFieldValue($row, $groupField);
+                $key = (string) $val;
+                if (!isset($seen[$key])) {
+                    $seen[$key] = true;
+                    $deduped[]  = [$groupField => $val];
+                }
+            }
+            $allRows = $deduped;
+        }
+
+        $total  = count($allRows);
+        $limit  = $this->limit ?? $total;
+        $offset = $this->offset ?? 0;
+        $sliced = array_slice($allRows, $offset, $limit);
+
+        return new FakeSqlResultSet($sliced, $total);
+    }
+
+    protected function fetchConsolidatedHistoryRows(string $groupField, array $groupValues): array
+    {
+        if (empty($groupValues)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $this->rows,
+            fn ($row) => in_array($this->resolveRowFieldValue($row, $groupField), $groupValues, true)
+        ));
+    }
 }
 
 class FakeWindowLimitedPaginationBuilder extends ManticoreBuilder
@@ -70,6 +109,46 @@ class FakeWindowLimitedPaginationBuilder extends ManticoreBuilder
         $window = $this->limit ?? 20;
 
         return array_slice($this->rows, 0, $window);
+    }
+
+    protected function executeSqlQuery(string $sql, ?bool $rawMode = null): mixed
+    {
+        $allRows = $this->rows;
+
+        // Simulate GROUP BY: deduplicate rows by the group field
+        if (!empty($this->groupBy)) {
+            $groupField = $this->groupBy[0];
+            $seen    = [];
+            $deduped = [];
+            foreach ($allRows as $row) {
+                $val = $this->resolveRowFieldValue($row, $groupField);
+                $key = (string) $val;
+                if (!isset($seen[$key])) {
+                    $seen[$key] = true;
+                    $deduped[]  = [$groupField => $val];
+                }
+            }
+            $allRows = $deduped;
+        }
+
+        $total  = count($allRows);
+        $limit  = $this->limit ?? $total;
+        $offset = $this->offset ?? 0;
+        $sliced = array_slice($allRows, $offset, $limit);
+
+        return new FakeSqlResultSet($sliced, $total);
+    }
+
+    protected function fetchConsolidatedHistoryRows(string $groupField, array $groupValues): array
+    {
+        if (empty($groupValues)) {
+            return [];
+        }
+
+        return array_values(array_filter(
+            $this->rows,
+            fn ($row) => in_array($this->resolveRowFieldValue($row, $groupField), $groupValues, true)
+        ));
     }
 }
 
@@ -96,13 +175,16 @@ class ExposedRawRowsBuilder extends ManticoreBuilder
 
 class FakeSqlPaginateBuilder extends ManticoreBuilder
 {
+    private static ?array $lastExtractedRows = null;
+
     private SplQueue $sqlResponses;
 
     public function __construct($model)
     {
         parent::__construct($model);
 
-        $this->sqlResponses = new SplQueue();
+        $this->sqlResponses          = new SplQueue();
+        self::$lastExtractedRows     = null;
     }
 
     public function queueSqlResponse(mixed $response): static
@@ -118,7 +200,36 @@ class FakeSqlPaginateBuilder extends ManticoreBuilder
             throw new RuntimeException('No fake SQL response queued for: '.$sql);
         }
 
-        return $this->sqlResponses->dequeue();
+        $response = $this->sqlResponses->dequeue();
+        $allRows  = $this->extractRawRows($response);
+        $total    = method_exists($response, 'getTotal') ? $response->getTotal() : count($allRows);
+        $offset   = $this->offset ?? 0;
+        $limit    = $this->limit !== null ? $this->limit : count($allRows);
+        $sliced   = array_slice($allRows, $offset, $limit);
+
+        self::$lastExtractedRows = $allRows;
+
+        return new FakeSqlResultSet($sliced, $total);
+    }
+
+    protected function fetchConsolidatedHistoryRows(string $groupField, array $groupValues): array
+    {
+        if (empty($groupValues)) {
+            return [];
+        }
+
+        if (!$this->sqlResponses->isEmpty()) {
+            return $this->extractRawRows($this->sqlResponses->dequeue());
+        }
+
+        if (self::$lastExtractedRows !== null) {
+            return array_values(array_filter(
+                self::$lastExtractedRows,
+                fn ($row) => in_array($this->resolveRowFieldValue($row, $groupField), $groupValues, true)
+            ));
+        }
+
+        return [];
     }
 }
 
@@ -483,7 +594,7 @@ it('builds sql limit as offset then limit', function () {
         ->limit(10)
         ->sqlPublic();
 
-    expect($sql)->toContain('LIMIT 20, 10');
+    expect($sql)->toContain('LIMIT 10 OFFSET 20');
 });
 
 it('uses wildcard field when match receives only keywords', function () {
@@ -494,7 +605,7 @@ it('uses wildcard field when match receives only keywords', function () {
         ->limit(10)
         ->sqlPublic();
 
-    expect($sql)->toContain("MATCH('@* nos')");
+    expect($sql)->toContain("MATCH('(@* (nos))')");
 });
 
 it('keeps real total when paginating sql mode with select group by and order by', function () {
