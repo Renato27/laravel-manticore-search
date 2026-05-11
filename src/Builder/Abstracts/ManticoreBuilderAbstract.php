@@ -132,7 +132,6 @@ abstract class ManticoreBuilderAbstract
 
     /**
      * Resolve the target Manticore index name.
-     * Priority: explicit override → model searchableAs() → Eloquent table name.
      */
     protected function resolveIndexName(): string
     {
@@ -192,11 +191,6 @@ abstract class ManticoreBuilderAbstract
     /**
      * Execute a SQL query against Manticore.
      *
-     * By default (httpRawMode = false) this uses the standard SQL endpoint and returns a ResultSet.
-     *
-     * When httpRawMode = true the request is sent to the raw SQL endpoint (`mode=raw`), which
-     * returns a plain array of rows instead of a ResultSet.  This is only used by fetchRawQuery()
-     * and getRawRowsForCurrentQuery() when the caller set rawQuery($sql, rawMode: true).
      */
     protected function executeSqlQuery(string $sql, bool $httpRawMode = false): mixed
     {
@@ -282,7 +276,11 @@ abstract class ManticoreBuilderAbstract
         }
 
         foreach ($this->option as $key => $value) {
-            $search->option($key, $value);
+            if ($key === 'max_matches') {
+                $search->maxMatches((int) $value);
+            } else {
+                $search->option($key, $value);
+            }
         }
 
         return $search;
@@ -291,11 +289,6 @@ abstract class ManticoreBuilderAbstract
     /**
      * Apply the resolved index name to a Search instance.
      *
-     * NOTE: We use Reflection to set the internal 'index' parameter on the Search
-     * object because the Manticore PHP client does not expose a public setter that
-     * keeps both 'table' and 'index' params in sync (required for multi-index syntax).
-     * This is a known limitation of the upstream client; the reflection access
-     * is intentional and must be revisited if the client adds a public API for this.
      */
     private function applyIndex(Search $search): void
     {
