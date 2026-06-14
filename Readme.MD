@@ -2,6 +2,16 @@
 
 A driver for integrating **Manticore Search** with Laravel, featuring a fluent query builder, Eloquent model hydration, robust pagination, and support for multiple named connections.
 
+## Related packages
+
+If you need full Eloquent support (migrations, `create`, `update`, `delete`, 
+relations, scopes, casts) natively on Manticore, see 
+[laravel-manticore-eloquent](https://github.com/Renato27/laravel-manticore-eloquent) 
+— a Laravel database driver over the Manticore MySQL protocol.
+
+This package (`manticore-laravel-search`) focuses on the HTTP/JSON search API, 
+fluent query builder, consolidation, and facets.
+
 ## What this library does
 
 - Exposes a fluent query builder through `Model::manticore()`.
